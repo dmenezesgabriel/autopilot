@@ -19,7 +19,7 @@ The version changes only when a key is renamed or removed, or when what a key me
 ```yaml
 version: 1
 prompt: prompt-execution.md      # instructions attached to each session's opening prompt
-run_dir: .autopilot-run          # journal and agent transcripts (read at start only)
+run_dir: .autopilot-run          # journal and agent transcripts (read at start only); add it to .gitignore
 backlog:
   source: markdown               # markdown | command: where the next row comes from
   file: docs/backlog.md          # markdown only

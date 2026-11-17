@@ -31,6 +31,14 @@ export type LoopCase = {
   /** Leaves `--agent-command` out, so the workflow's own `command` is what starts the agent. */
   omitAgentCommand?: boolean;
   timeoutMs?: number;
+  /** More keys for the `preflight` mapping the harness writes, such as `leftover: [{ match: 'x' }]`; the host check stays off. */
+  preflight?: string;
+  /** Where the loop keeps its journal, relative to the repository; `.run` unless the case says. */
+  runDir?: string;
+  /** Runs once the repository exists and before the loop starts, for a process the first preflight must already see. */
+  beforeStart?: (dir: string, stateDir: string) => Promise<void>;
+  /** Keeps the workflow file outside the repository and passes it with `--workflow`, as an installed loop is run. */
+  workflowOutside?: boolean;
   /** Extra environment for the loop, such as a PATH holding a stand-in for a tool. */
   env?: Record<string, string>;
   /** Runs while the loop runs: waits for its events, calls the CLI as an orchestrator would, kills it, starts another. */
@@ -48,10 +56,14 @@ export type LiveLoop = {
   startAnother(): Promise<{ code: number | null; stderr: string }>;
   /** Runs an `autopilot` command against this repository, as an orchestrating agent would. */
   cli(...args: string[]): Promise<string>;
+  /** Runs `autopilot watch` and resolves with the first line it prints, which is what wakes an orchestrator. */
+  firstWatchLine(timeoutMs?: number): Promise<string>;
 };
 
 export type LoopResult = {
   exitCode: number | null;
+  /** What the first loop wrote to its standard error: the reason a refused start gives. */
+  stderr: string;
   events: Array<Record<string, unknown>>;
   /** Subjects of the commits made after the initial one, oldest first. */
   commits: string[];
@@ -82,10 +94,11 @@ export async function runLoop(spec: LoopCase): Promise<LoopResult> {
   const files: Record<string, string | null> = {
     "docs/backlog.md": TWO_ROWS,
     "prompt-execution.md": "# Do the next row\n",
-    ".gitignore": ".run/\n",
-    "autopilot.yaml": `version: 1\nrun_dir: .run\npreflight: { host_check: false }\n${spec.workflow}`,
+    ".gitignore": `${runDirOf(spec)}/\n`,
+    "autopilot.yaml": `version: 1\nrun_dir: ${runDirOf(spec)}\npreflight: { host_check: false${spec.preflight === undefined ? "" : `, ${spec.preflight}`} }\n${spec.workflow}`,
     ...spec.files,
   };
+  const loop = await placeWorkflow(spec, files, stateDir);
   for (const [path, text] of Object.entries(files)) {
     if (text === null) continue;
     await mkdir(dirname(join(dir, path)), { recursive: true });
@@ -94,12 +107,24 @@ export async function runLoop(spec: LoopCase): Promise<LoopResult> {
   await writeFile(join(stateDir, "scenario.json"), JSON.stringify({ sessions: spec.sessions }));
   await run("git", ["add", "-A"], { cwd: dir });
   await run("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "initial"], { cwd: dir });
-  const first = spawnLoop(dir, stateDir, spec);
-  const live = liveLoop(dir, stateDir, spec, first);
+  await spec.beforeStart?.(dir, stateDir);
+  const first = spawnLoop(dir, stateDir, loop);
+  const live = liveLoop(dir, stateDir, loop, first);
   const driven = spec.during === undefined ? Promise.resolve() : spec.during(live);
-  const exitCode = (await first.done).code;
+  const ended = await first.done;
   await driven;
-  return resultOf(dir, stateDir, exitCode);
+  return resultOf(dir, stateDir, ended, runDirOf(spec));
+}
+
+const runDirOf = (spec: LoopCase): string => spec.runDir ?? ".run";
+
+/** With `workflowOutside` the workflow file leaves the repository's files and the loop is told where it is. */
+async function placeWorkflow(spec: LoopCase, files: Record<string, string | null>, stateDir: string): Promise<LoopCase> {
+  if (spec.workflowOutside !== true) return spec;
+  const path = join(stateDir, "workflow.yaml");
+  await writeFile(path, files["autopilot.yaml"] ?? "");
+  files["autopilot.yaml"] = null;
+  return { ...spec, args: [...(spec.args ?? []), "--workflow", path] };
 }
 
 type Spawned = { child: ChildProcess; done: Promise<{ code: number | null; stderr: string }> };
@@ -120,7 +145,8 @@ function spawnLoop(dir: string, stateDir: string, spec: LoopCase): Spawned {
 }
 
 function liveLoop(dir: string, stateDir: string, spec: LoopCase, first: Spawned): LiveLoop {
-  const journal = join(dir, ".run", "events.jsonl");
+  const journal = join(dir, runDirOf(spec), "events.jsonl");
+  const workflowArgs = (spec.args ?? []).flatMap((arg, at, all) => (arg === "--workflow" ? ["--workflow", all[at + 1] ?? ""] : []));
   return {
     dir,
     kill: async (signal) => {
@@ -128,7 +154,8 @@ function liveLoop(dir: string, stateDir: string, spec: LoopCase, first: Spawned)
       await first.done;
     },
     startAnother: () => spawnLoop(dir, stateDir, spec).done,
-    cli: async (...args) => (await run(process.execPath, ["--experimental-transform-types", "--no-warnings", CLI, ...args, "--repo", dir])).stdout,
+    cli: async (...args) => (await run(process.execPath, ["--experimental-transform-types", "--no-warnings", CLI, ...args, "--repo", dir, ...workflowArgs])).stdout,
+    firstWatchLine: (timeoutMs = 30_000) => firstLineOf(["watch", "--repo", dir, ...workflowArgs], timeoutMs),
     waitForEvent: async (type, timeoutMs = 30_000) => {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
@@ -142,12 +169,13 @@ function liveLoop(dir: string, stateDir: string, spec: LoopCase, first: Spawned)
   };
 }
 
-async function resultOf(dir: string, stateDir: string, exitCode: number | null): Promise<LoopResult> {
-  const journal = await readFile(join(dir, ".run", "events.jsonl"), "utf8").catch(() => "");
+async function resultOf(dir: string, stateDir: string, ended: { code: number | null; stderr: string }, runDir: string): Promise<LoopResult> {
+  const journal = await readFile(join(dir, runDir, "events.jsonl"), "utf8").catch(() => "");
   const events = journal.split("\n").filter((line) => line !== "").map((line) => JSON.parse(line) as Record<string, unknown>);
   const { stdout } = await run("git", ["log", "--format=%s", "--reverse", "-n", "50"], { cwd: dir });
   return {
-    exitCode,
+    exitCode: ended.code,
+    stderr: ended.stderr,
     events,
     commits: stdout.split("\n").filter((line) => line !== "").slice(1),
     dir,
@@ -161,3 +189,12 @@ async function resultOf(dir: string, stateDir: string, exitCode: number | null):
 }
 
 export const typesOf = (result: LoopResult): string[] => result.events.map((event) => String(event["type"]));
+
+/** Starts a CLI command that keeps running and resolves with the first line it prints, then ends it. */
+function firstLineOf(args: string[], timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--experimental-transform-types", "--no-warnings", CLI, ...args], { stdio: ["ignore", "pipe", "inherit"] });
+    const timer = setTimeout(() => (child.kill("SIGKILL"), reject(new Error(`no line from \`${args[0]}\` within ${timeoutMs} ms`))), timeoutMs);
+    child.stdout?.once("data", (chunk: Buffer) => (clearTimeout(timer), child.kill("SIGKILL"), resolve(chunk.toString("utf8").split("\n")[0] ?? "")));
+  });
+}

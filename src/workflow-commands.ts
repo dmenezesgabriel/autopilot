@@ -1,8 +1,9 @@
 import { access, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { runDirFor, splitRepo } from "./ctl.ts";
 import { EVENTS, EVENT_NAMES } from "./event-registry.ts";
 import { requiredValue } from "./flags.ts";
+import { isIgnoredByGit } from "./git-probe.ts";
 import type { LoopEvent } from "./mailbox.ts";
 import { formatSimulation, simulate } from "./simulate.ts";
 import { STARTER_WORKFLOW } from "./starter-workflow.ts";
@@ -22,9 +23,22 @@ function locate(args: string[]): Located {
 
 /** `autopilot validate`: reads the workflow and says what it will do. */
 export async function validate(args: string[]): Promise<string> {
-  const { workflowPath } = locate(args);
+  const { repoRoot, workflowPath } = locate(args);
   const workflow = await loadWorkflow(workflowPath, true);
-  return [`${workflowPath}: ok (schema version ${workflow.schemaVersion})`, ...describeWorkflow(workflow)].join("\n");
+  const warning = await runDirWarning(repoRoot, workflow.runDir);
+  return [`${workflowPath}: ok (schema version ${workflow.schemaVersion})`, ...describeWorkflow(workflow), ...(warning === null ? [] : [warning])].join("\n");
+}
+
+/**
+ * A run directory git does not ignore makes the tree dirty from the first journal line, so the loop's own
+ * check asks the agent for a reply after its first commit and waits for it (seen on a real run with
+ * `.autopilot-run` and a `.gitignore` that listed `.run/`).
+ */
+async function runDirWarning(repoRoot: string, runDir: string): Promise<string | null> {
+  const inside = relative(repoRoot, resolve(repoRoot, runDir));
+  if (inside === "" || inside.startsWith("..")) return null;
+  if ((await isIgnoredByGit(repoRoot, `${inside}/events.jsonl`)) !== false) return null;
+  return `  warning: run dir ${runDir} is not ignored by git, so the loop's own journal leaves the tree dirty and every session ends in a dirty_tree reply; add "${inside}/" to .gitignore`;
 }
 
 function describeWorkflow(workflow: Workflow): string[] {

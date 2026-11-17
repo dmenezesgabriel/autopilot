@@ -6,7 +6,7 @@ export const STARTER_WORKFLOW = `# autopilot.yaml: how autopilot drives this rep
 version: 1                         # the schema this file is written for; required
 
 prompt: prompt-execution.md        # the instructions every session is given
-run_dir: .autopilot-run            # journal and transcripts (read at start only)
+run_dir: .autopilot-run            # journal and transcripts (read at start only); git must ignore it
 
 backlog:
   source: markdown                 # markdown | command: where the next row comes from
