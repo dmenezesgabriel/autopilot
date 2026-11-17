@@ -25,7 +25,7 @@ class FakePorts implements EnginePorts {
 
 const engineFor = (on: string, ports = new FakePorts()) => ({
   ports,
-  engine: new WorkflowEngine(parseWorkflow(`on:\n${on}`, "w.yaml").handlers, ports),
+  engine: new WorkflowEngine(parseWorkflow(`version: 1\non:\n${on}`, "w.yaml").handlers, ports),
 });
 
 const DEVICE: LoopEvent = {

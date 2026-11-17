@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parseWorkflow } from "./workflow.ts";
 
-const handlers = (on: string) => parseWorkflow(`on:\n${on}`, "w.yaml").handlers;
+const handlers = (on: string) => parseWorkflow(`version: 1\non:\n${on}`, "w.yaml").handlers;
 
 describe("handlers", () => {
   it("reads a handler with a name, conditions and a list of actions, in order", () => {

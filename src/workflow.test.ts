@@ -3,13 +3,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { loadWorkflow, parseWorkflow } from "./workflow.ts";
+import { loadWorkflow, parseWorkflow, WORKFLOW_SCHEMA_VERSION } from "./workflow.ts";
 
-const parse = (yaml: string) => parseWorkflow(yaml, "autopilot.yaml");
+/** A workflow with the schema version stated, as every real file has; `parseRaw` is for the cases about the version itself. */
+const parse = (yaml: string) => parseWorkflow(`version: 1\n${yaml}`, "autopilot.yaml");
+const parseRaw = (yaml: string) => parseWorkflow(yaml, "autopilot.yaml");
 
 describe("parseWorkflow defaults and sections", () => {
   it("fills every key a repository leaves out with the loop's default", () => {
-    const workflow = parse("{}");
+    const workflow = parse("");
 
     assert.equal(workflow.prompt, "prompt-execution.md");
     assert.equal(workflow.runDir, ".autopilot-run");
@@ -24,13 +26,12 @@ describe("parseWorkflow defaults and sections", () => {
     assert.deepEqual(workflow.handlers, []);
   });
 
-  it("reads an empty file as the defaults", () => {
-    assert.equal(parse("").prompt, "prompt-execution.md");
+  it("reads a file that holds only its version as the defaults", () => {
+    assert.equal(parseRaw("version: 1").prompt, "prompt-execution.md");
   });
 
   it("reads each section a repository sets", () => {
     const workflow = parse(`
-version: 1
 prompt: PROMPT.md
 run_dir: scripts/loop/.run
 backlog: { file: BACKLOG.md, marker: "**open ← next" }
@@ -69,7 +70,7 @@ wake: [needs_answer, loop_halted]
   });
 
   it("wakes an orchestrator for decisions and escalations unless the workflow says otherwise", () => {
-    const wake = parse("{}").wake;
+    const wake = parse("").wake;
 
     assert.ok(wake.includes("needs_reply") && wake.includes("iteration_stalled"));
     assert.equal(wake.includes("iteration_done"), false);
@@ -92,7 +93,6 @@ describe("parseWorkflow refusals", () => {
     assert.throws(() => parse("harness: gpt"), /harness: expected one of claude, devin, got "gpt"/);
     assert.throws(() => parse("harnesses: { gpt: {} }"), /harnesses\.gpt: expected a known harness \(claude, devin\), got "gpt"/);
     assert.throws(() => parse("harnesses: { devin: { modle: x } }"), /harnesses\.devin: unknown key "modle"; expected one of model, effort, command/);
-    assert.throws(() => parse("version: 2"), /version: expected 1, got 2/);
   });
 
   it("refuses text that is not YAML, a pattern that is not a regular expression, and an event it never emits", () => {
@@ -118,9 +118,17 @@ describe("loadWorkflow", () => {
 
   it("reads JSON too, since JSON is YAML", async () => {
     const path = join(dir, "autopilot.yaml");
-    await writeFile(path, '{"run_dir": ".run"}');
+    await writeFile(path, '{"version": 1, "run_dir": ".run"}');
 
     assert.equal((await loadWorkflow(path, true)).runDir, ".run");
+  });
+
+  it("refuses a file that exists but states no version, naming the file", async () => {
+    const path = join(dir, "autopilot.yaml");
+    await writeFile(path, '{"run_dir": ".run"}');
+
+    await assert.rejects(() => loadWorkflow(path, true), (error: Error) => error.message.includes(path) && error.message.includes("version is missing"));
+    await assert.rejects(() => loadWorkflow(path, false), /version is missing/, "an optional file that exists is still checked");
   });
 });
 
@@ -138,7 +146,7 @@ describe("parseWorkflow wrapper rules", () => {
 
 describe("parseWorkflow backlog sources", () => {
   it("reads a markdown source by default, with its file and marker", () => {
-    assert.deepEqual(parse("{}").backlog, { source: "markdown", file: "docs/backlog.md", marker: "← next" });
+    assert.deepEqual(parse("").backlog, { source: "markdown", file: "docs/backlog.md", marker: "← next" });
     assert.deepEqual(parse("backlog: { source: markdown, file: TODO.md, marker: NEXT }").backlog, { source: "markdown", file: "TODO.md", marker: "NEXT" });
   });
 
@@ -170,8 +178,42 @@ describe("parseWorkflow backlog sources", () => {
   });
 
   it("checks the host by default and lets a repository turn that off", () => {
-    assert.equal(parse("{}").hostCheck, true);
+    assert.equal(parse("").hostCheck, true);
     assert.equal(parse("preflight: { host_check: false }").hostCheck, false);
     assert.throws(() => parse("preflight: { host_check: 'no' }"), /preflight\.host_check: expected true or false, got "no"/);
+  });
+});
+
+describe("the schema version", () => {
+  it("is read from the file and kept on the workflow", () => {
+    assert.equal(parseRaw("version: 1").schemaVersion, 1);
+    assert.equal(WORKFLOW_SCHEMA_VERSION, 1);
+  });
+
+  it("is required, with the line to add, because a file that does not say which schema it is for is ambiguous", () => {
+    assert.throws(() => parseRaw("prompt: P.md"), /autopilot\.yaml: version is missing; add "version: 1" as the first key/);
+    assert.throws(() => parseRaw(""), /version is missing/);
+    assert.throws(() => parseRaw("{}"), /version is missing/);
+  });
+
+  it("refuses a file from a newer schema, and says to upgrade rather than guessing what its keys mean", () => {
+    assert.throws(() => parseRaw("version: 2\nprompt: P.md"), /autopilot\.yaml\.version: 2 is newer than the schema this autopilot reads \(1\); upgrade autopilot/);
+    assert.throws(() => parseRaw("version: 99"), /99 is newer/);
+  });
+
+  it("refuses a version that is not the integer 1, quoting what it found", () => {
+    for (const bad of ["0", "-1", '"1"', "1.5", "true", "null", "[1]"]) {
+      assert.throws(() => parseRaw(`version: ${bad}`), /version: expected the integer 1, got /, bad);
+    }
+  });
+
+  it("reads the same whichever order the keys are in", () => {
+    assert.equal(parseRaw("prompt: P.md\nversion: 1").prompt, "P.md");
+  });
+
+  it("is what a missing optional file defaults to, so a repository with no autopilot.yaml still runs", async () => {
+    const workflow = await loadWorkflow("/nonexistent/autopilot.yaml", false);
+
+    assert.equal(workflow.schemaVersion, 1);
   });
 });

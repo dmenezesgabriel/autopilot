@@ -1,11 +1,13 @@
 import type { AgentError, RateLimitVerdict } from "./rate-limit.ts";
 
-export type StopReason =
-  | "end_turn"
-  | "max_tokens"
-  | "max_turn_requests"
-  | "refusal"
-  | "cancelled";
+/** The stop reasons the Agent Client Protocol defines for a prompt turn. */
+export const STOP_REASONS = ["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"] as const;
+
+export type StopReason = (typeof STOP_REASONS)[number];
+
+export function isStopReason(value: unknown): value is StopReason {
+  return STOP_REASONS.some((reason) => reason === value);
+}
 
 /** How a prompt ended, from the agent's own response. */
 export type TurnEnd =

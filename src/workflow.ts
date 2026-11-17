@@ -18,6 +18,8 @@ export type LimitProbeKind = "cam" | "none";
  * read from the repository's own `autopilot.yaml`, again at the start of each iteration.
  */
 export type Workflow = {
+  /** The schema version the file declared; always {@link WORKFLOW_SCHEMA_VERSION}, since a file of another version is refused. */
+  schemaVersion: number;
   prompt: string;
   runDir: string;
   /** Where the next row comes from; exactly one source, chosen by `backlog.source`. */
@@ -47,6 +49,14 @@ export type Backlog =
   | { source: "markdown"; file: string; marker: string }
   | { source: "command"; command: string | string[]; timeoutMs: number };
 
+/**
+ * The schema version this autopilot reads, and the only one so far. A file states its own `version`; the
+ * key is required, because a file that does not say which schema it is written for cannot be told apart from
+ * one written for a later schema that happens to omit it. It changes only when a key is renamed or removed or its
+ * meaning changes; a new optional key does not change it.
+ */
+export const WORKFLOW_SCHEMA_VERSION = 1;
+
 export const DEFAULT_WORKFLOW_FILE = "autopilot.yaml";
 
 const TOP_KEYS = ["version", "prompt", "run_dir", "backlog", "harness", "harnesses", "plan", "rules", "preflight", "limits", "wake", "on"] as const;
@@ -56,16 +66,17 @@ const TOP_KEYS = ["version", "prompt", "run_dir", "backlog", "harness", "harness
  * event it has never emitted is an error that names its path, so a typo never silently runs a default.
  *
  * @example
- * parseWorkflow("backlog: { marker: '**open ← next' }", "autopilot.yaml").backlog.marker; // "**open ← next"
+ * parseWorkflow("version: 1\nbacklog: { marker: '**open ← next' }", "autopilot.yaml").backlog.marker; // "**open ← next"
  */
 export function parseWorkflow(source: string, name: string): Workflow {
   const raw = asObject(readYaml(source, name) ?? {}, name);
   onlyKeys(raw, TOP_KEYS, name);
-  if ((raw["version"] ?? 1) !== 1) fail(`${name}.version`, "1", raw["version"]);
+  const schemaVersion = checkedSchemaVersion(raw, name);
   const plan = section(raw, "plan", ["follow_up"], name);
   const preflight = section(raw, "preflight", ["leftover", "wrappers", "host_check"], name);
   const limits = section(raw, "limits", ["probe"], name);
   return {
+    schemaVersion,
     prompt: text(raw, "prompt", name, "prompt-execution.md"),
     runDir: text(raw, "run_dir", name, ".autopilot-run"),
     backlog: parseBacklog(raw, name),
@@ -79,6 +90,26 @@ export function parseWorkflow(source: string, name: string): Workflow {
     wake: wakeEvents(raw, name),
     handlers: parseHandlersAt(raw, name),
   };
+}
+
+/**
+ * The file's `version`, which must be present, an integer, and the one this autopilot reads. Each refusal says
+ * what to do: a file from a newer schema needs a newer autopilot, and one with no version needs the key.
+ *
+ * @example
+ * checkedSchemaVersion({ version: 1 }, "autopilot.yaml"); // 1
+ */
+function checkedSchemaVersion(raw: Obj, name: string): number {
+  const where = `${name}.version`;
+  const version = raw["version"];
+  if (version === undefined) {
+    throw new Error(`${name}: version is missing; add "version: ${WORKFLOW_SCHEMA_VERSION}" as the first key (the schema version this autopilot reads)`);
+  }
+  if (typeof version === "number" && Number.isInteger(version) && version > WORKFLOW_SCHEMA_VERSION) {
+    throw new Error(`${where}: ${version} is newer than the schema this autopilot reads (${WORKFLOW_SCHEMA_VERSION}); upgrade autopilot, or write this file for version ${WORKFLOW_SCHEMA_VERSION}`);
+  }
+  if (version !== WORKFLOW_SCHEMA_VERSION) return fail(where, `the integer ${WORKFLOW_SCHEMA_VERSION}`, version);
+  return version;
 }
 
 function parseHandlersAt(raw: Obj, name: string): Handler[] {
@@ -182,7 +213,7 @@ export async function loadWorkflow(path: string, required: boolean): Promise<Wor
     return parseWorkflow(await readFile(path, "utf8"), path);
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
-    if (missing && !required) return parseWorkflow("{}", path);
+    if (missing && !required) return parseWorkflow(`version: ${WORKFLOW_SCHEMA_VERSION}\n`, path);
     throw error;
   }
 }

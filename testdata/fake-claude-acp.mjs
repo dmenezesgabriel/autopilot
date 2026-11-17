@@ -10,6 +10,7 @@
 //   work: shell text                                        run in the repository when the session works
 //   silentFirstTurn: text                                   first working turn ends with this message and no work
 //   rateLimit: { resetsInSeconds, type }                    first working turn ends on a rejected usage limit
+//   hold: true                                              the working turn never ends, so a test can kill the loop mid-session
 import { execSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -109,6 +110,7 @@ async function planTurn() {
 }
 
 function workTurn() {
+  if (me.hold) return new Promise(() => {});
   if (me.rateLimit && !limited) {
     limited = true;
     rateLimitFrame();
@@ -136,7 +138,7 @@ async function onRequest(message) {
   }
   if (method === "session/prompt") {
     log(`prompts-${n}.log`, params.prompt.map((block) => block.text ?? block.resource?.text ?? "").join("\n---\n"));
-    const stopReason = mode === "plan" ? await planTurn() : workTurn();
+    const stopReason = mode === "plan" ? await planTurn() : await workTurn();
     return send({ id, result: { stopReason, usage: {} } });
   }
   return send({ id, error: { code: -32601, message: `fake agent: no method ${method}` } });

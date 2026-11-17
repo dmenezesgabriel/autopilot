@@ -1,6 +1,6 @@
 import type { AgentDialect, PermissionAsk, Question } from "./agent-dialect.ts";
 import type { AgentSignal } from "./agent-signal.ts";
-import type { StopReason } from "./decide.ts";
+import { isStopReason, STOP_REASONS, type StopReason } from "./decide.ts";
 import { JsonRpcConnection, RpcError, type LineChannel } from "./json-rpc.ts";
 
 export interface AgentHandlers {
@@ -203,12 +203,21 @@ export class AcpAgent {
     });
   }
 
-  /** Resolves with the stop reason; rejects with an RpcError when the agent answers with an error. */
+  /**
+   * Resolves with the stop reason; rejects with an RpcError when the agent answers with an error, and with a
+   * plain Error naming the value when the reply holds a stop reason the protocol does not define (the loop
+   * decides on it, and an unknown one would otherwise surface as a failure inside the decision).
+   */
   async prompt(blocks: PromptBlock[]): Promise<StopReason> {
     const reply = (await this.rpc.request("session/prompt", {
       sessionId: this.sessionId,
       prompt: blocks,
-    })) as { stopReason: StopReason };
+    })) as { stopReason?: unknown };
+    if (!isStopReason(reply.stopReason)) {
+      throw new Error(
+        `session/prompt replied with stopReason ${JSON.stringify(reply.stopReason)}; expected one of ${STOP_REASONS.join(", ")}`,
+      );
+    }
     return reply.stopReason;
   }
 

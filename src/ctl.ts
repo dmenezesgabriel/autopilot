@@ -79,8 +79,23 @@ export function splitRepo(argv: string[], cwd: string): { repoRoot: string; rest
   return { repoRoot: resolve(cwd, value), rest: [...argv.slice(0, at), ...argv.slice(at + 2)] };
 }
 
-export async function runDirFor(repoRoot: string): Promise<RunDir> {
-  const workflow = await loadWorkflow(resolve(repoRoot, DEFAULT_WORKFLOW_FILE), false);
+/** Takes `--workflow <file>` off the arguments; null when none is named. */
+export function splitWorkflow(argv: string[]): { workflow: string | null; rest: string[] } {
+  const at = argv.indexOf("--workflow");
+  if (at === -1) return { workflow: null, rest: argv };
+  const workflow = requiredValue(argv, "--workflow", "a workflow file") ?? "";
+  return { workflow, rest: [...argv.slice(0, at), ...argv.slice(at + 2)] };
+}
+
+/**
+ * The run directory of a repository: the one its workflow names. The workflow is the repository's own
+ * autopilot.yaml, or the file `--workflow` names, which must exist. Every command that reads or writes the run
+ * directory resolves it here, so `stop`, `answer` and `status` reach the directory the loop actually uses.
+ */
+export async function runDirFor(repoRoot: string, workflowFlag: string | null = null): Promise<RunDir> {
+  const named = workflowFlag !== null;
+  const file = resolve(repoRoot, named ? workflowFlag : DEFAULT_WORKFLOW_FILE);
+  const workflow = await loadWorkflow(file, named);
   const path = process.env["AUTOPILOT_RUN_DIR"] ?? resolve(repoRoot, workflow.runDir);
   return new RunDir(resolve(path));
 }
@@ -110,10 +125,11 @@ export async function service(action: string, repoRoot: string, runArguments: st
 
 /** The operator commands: status, answer, reply, use, stop, report and service. */
 export async function runCtl(args: string[]): Promise<string> {
-  const { repoRoot, rest: argv } = splitRepo(args, process.cwd());
-  const runDir = await runDirFor(repoRoot);
+  const { repoRoot, rest: afterRepo } = splitRepo(args, process.cwd());
+  const { workflow, rest: argv } = splitWorkflow(afterRepo);
+  const runDir = await runDirFor(repoRoot, workflow);
   const [command, id, ...rest] = argv;
-  if (command === "service") return service(id ?? "", repoRoot, rest);
+  if (command === "service") return service(id ?? "", repoRoot, workflow === null ? rest : ["--workflow", resolve(repoRoot, workflow), ...rest]);
   if (command === "report") return report(runDir, repoRoot, argv.includes("--json"));
   if (command === "status") return status(runDir);
   if (command === "use") {

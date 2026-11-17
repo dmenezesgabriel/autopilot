@@ -3,7 +3,7 @@ export const STARTER_WORKFLOW = `# autopilot.yaml: how autopilot drives this rep
 # Read again at the start of every iteration, so an edit takes effect without a restart.
 # \`autopilot validate\` checks it; \`autopilot events\` lists the events a handler can name;
 # \`autopilot simulate\` replays the journal through it before you trust it.
-version: 1
+version: 1                         # the schema this file is written for; required
 
 prompt: prompt-execution.md        # the instructions every session is given
 run_dir: .autopilot-run            # journal and transcripts (read at start only)

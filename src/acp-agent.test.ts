@@ -397,3 +397,25 @@ describe("AcpAgent effort selection", () => {
     );
   });
 });
+
+describe("AcpAgent prompt", () => {
+  it("returns the stop reason the agent replied with", async () => {
+    const { channel, agent } = await openSession([]);
+
+    const prompting = agent.prompt([{ type: "text", text: "go" }]);
+    channel.deliver({ id: 2, result: { stopReason: "end_turn" } });
+
+    assert.equal(await prompting, "end_turn");
+  });
+
+  it("refuses a reply with no stop reason or an unknown one, naming the value, so the loop never decides on it", async () => {
+    for (const result of [{}, { stopReason: "paused" }]) {
+      const { channel, agent } = await openSession([]);
+
+      const prompting = agent.prompt([{ type: "text", text: "go" }]);
+      channel.deliver({ id: 2, result });
+
+      await assert.rejects(prompting, /session\/prompt replied with stopReason .*; expected one of end_turn, max_tokens/);
+    }
+  });
+});

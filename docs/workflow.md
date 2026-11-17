@@ -8,7 +8,13 @@ Why these parts exist is in [rationale.md](rationale.md), with the measurements.
 
 ## Keys
 
-Every key is optional. An unknown key, a value of the wrong shape, or an event the loop never emits is an error that names its path.
+Every key but `version` is optional. An unknown key, a value of the wrong shape, or an event the loop never emits is an error that names its path.
+
+### Schema version
+
+`version` is the schema the file is written for, and it is required: put `version: 1` first. This autopilot reads version 1. A file with no `version` is refused (it could as easily be written for a later schema that omits the key), and so is a `version` that is not the integer 1. A file declaring a newer version is refused with an instruction to upgrade autopilot, never read on a guess.
+
+The version changes only when a key is renamed or removed, or when what a key means changes. Adding an optional key does not change it, so a file written today keeps reading as new optional keys arrive. When a version 2 exists, this autopilot's release notes will say what moved, and `autopilot validate` prints the version a file declares: `ok (schema version 1)`.
 
 ```yaml
 version: 1

@@ -10,21 +10,21 @@ import { followLines, shouldWake } from "./watch.ts";
 import { DEFAULT_WORKFLOW_FILE, loadWorkflow, type Workflow } from "./workflow.ts";
 import { summarizeJournal } from "./journal-summary.ts";
 
-type Located = { repoRoot: string; workflowPath: string; rest: string[] };
+type Located = { repoRoot: string; workflowPath: string; workflowFlag: string | null; rest: string[] };
 
 /** Takes `--repo` and `--workflow` off the arguments; the workflow defaults to autopilot.yaml in the repository. */
 function locate(args: string[]): Located {
   const { repoRoot, rest } = splitRepo(args, process.cwd());
   const named = requiredValue(rest, "--workflow", "a workflow file");
   const left = named === null ? rest : rest.filter((word, at) => word !== "--workflow" && rest[at - 1] !== "--workflow");
-  return { repoRoot, workflowPath: resolve(repoRoot, named ?? DEFAULT_WORKFLOW_FILE), rest: left };
+  return { repoRoot, workflowPath: resolve(repoRoot, named ?? DEFAULT_WORKFLOW_FILE), workflowFlag: named, rest: left };
 }
 
 /** `autopilot validate`: reads the workflow and says what it will do. */
 export async function validate(args: string[]): Promise<string> {
   const { workflowPath } = locate(args);
   const workflow = await loadWorkflow(workflowPath, true);
-  return [`${workflowPath}: ok`, ...describeWorkflow(workflow)].join("\n");
+  return [`${workflowPath}: ok (schema version ${workflow.schemaVersion})`, ...describeWorkflow(workflow)].join("\n");
 }
 
 function describeWorkflow(workflow: Workflow): string[] {
@@ -57,8 +57,8 @@ export async function init(args: string[]): Promise<string> {
 
 /** `autopilot simulate`: replays the repository's journal through its workflow, running nothing. */
 export async function simulateCommand(args: string[]): Promise<string> {
-  const { repoRoot, workflowPath } = locate(args);
-  const runDir = await runDirFor(repoRoot);
+  const { repoRoot, workflowPath, workflowFlag } = locate(args);
+  const runDir = await runDirFor(repoRoot, workflowFlag);
   const workflow = await loadWorkflow(workflowPath, true);
   const result = simulate(await runDir.readEvents(), workflow);
   return args.includes("--json") ? JSON.stringify(result, null, 2) : formatSimulation(result);
@@ -66,8 +66,8 @@ export async function simulateCommand(args: string[]): Promise<string> {
 
 /** `autopilot pending`: the questions and replies still waiting, each with its full event, as JSON. */
 export async function pending(args: string[]): Promise<string> {
-  const { repoRoot } = locate(args);
-  const journal = await (await runDirFor(repoRoot)).readEvents();
+  const { repoRoot, workflowFlag } = locate(args);
+  const journal = await (await runDirFor(repoRoot, workflowFlag)).readEvents();
   const asks = summarizeJournal(journal).open?.pending ?? [];
   const eventOf = (id: string): LoopEvent | undefined => [...journal].reverse().find((e) => e["id"] === id && e.type.startsWith("needs_"));
   return JSON.stringify(asks.map((ask) => ({ ...ask, event: eventOf(ask.id) ?? null })), null, 2);
@@ -79,8 +79,8 @@ export async function pending(args: string[]): Promise<string> {
  * the journal first. Meant for a Monitor.
  */
 export async function watch(args: string[], out: (line: string) => void, signal: AbortSignal): Promise<void> {
-  const { repoRoot, workflowPath, rest } = locate(args);
-  const runDir = await runDirFor(repoRoot);
+  const { repoRoot, workflowPath, workflowFlag, rest } = locate(args);
+  const runDir = await runDirFor(repoRoot, workflowFlag);
   const workflow = await loadWorkflow(workflowPath, false);
   const types = requiredValue(rest, "--types", "a comma-separated list of event names");
   const wake = (types === null ? workflow.wake : types.split(",")) as Workflow["wake"];
