@@ -1,0 +1,8 @@
+node_modules/
+.autopilot-run/
+*.log
+dist/
+*.tgz
+research_repos/
+local/
+.sensitive-strings.local

@@ -1,0 +1,21 @@
+# Two harnesses with their own models. When the first is limited, the next session runs on the second
+# instead of the loop waiting out the limit. A flag overrides one field at a time:
+#   autopilot run --model haiku            # model only; harness and effort stay as below
+#   autopilot use devin                    # next session on devin, with devin's settings below
+#   autopilot use --reset                  # the workflow decides again
+version: 1
+
+harness: claude
+harnesses:
+  claude: { model: sonnet, effort: high }
+  devin: { model: swe-2-high, command: devin }
+
+limits:
+  probe: cam        # a limit wait ends the first minute the live Claude account is usable again
+
+on:
+  rate_limited:
+    - name: fail-over-to-devin
+      do:
+        - use: { harness: devin }
+        - yield: "claude is limited until {{wakeAt}}; the next session runs on devin"

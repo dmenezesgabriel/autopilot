@@ -1,0 +1,12 @@
+# The smallest useful workflow: pick the harness and say how a finished row is found.
+# Every other key has a default; `autopilot validate` prints what this adds up to.
+version: 1
+
+harness: claude
+harnesses:
+  claude: { model: sonnet, effort: high }
+
+backlog:
+  source: markdown
+  file: docs/backlog.md
+  marker: "← next"      # the table row carrying this text is the next one

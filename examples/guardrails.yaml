@@ -1,0 +1,30 @@
+# Standing rules every session hears, a wait for work a session leaves behind, a rule that answers a
+# routine reply, and a report as a command that costs no orchestrator turn.
+version: 1
+
+rules:
+  - "Run the project's checks before every commit, and never commit with one failing."
+  - "Never end your turn to wait for a long job: start it as a background command and carry on from its result."
+
+preflight:
+  # A process a finished session leaves in the repository: the next session waits for it to end.
+  leftover:
+    - match: '\b(vite|vitest|playwright)\b'
+    - { match: '\bchrom(e|ium)\b', also_match: '--headless' }   # both must match
+  # A job queue's wrapper stays alive for as long as its job is queued or running.
+  wrappers:
+    - program: jobq
+      ignore_args: [--status]
+      hint: "`jobq cancel {{dir}}-{{pid}}` ends it"
+
+on:
+  needs_reply:
+    - name: dont-end-the-turn-to-wait
+      when: { why: no_commit, lastMessage: { matches: "[Ww]ait" } }
+      why: the rule above says a wait is a background command
+      do:
+        - reply: "Continue the task. Do not end your turn to wait; start the job as a background command."
+  iteration_done:
+    - do: { run: ["./scripts/notify.sh", "committed {{head}}"] }
+  loop_halted:
+    - do: { run: ./scripts/page-me.sh }   # the event is in AUTOPILOT_EVENT and on stdin as JSON

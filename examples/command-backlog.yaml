@@ -1,0 +1,18 @@
+# A repository whose work is not a markdown table: a directory of task files. The first line the command
+# prints is the next row's id (one printable line, at most 200 characters); nothing printed means none is
+# left. A command that fails or times out is never read as "no work left": the loop waits and says why.
+version: 1
+
+backlog:
+  source: command
+  command: "ls todo | head -1"
+  timeout_seconds: 30
+
+prompt: PROMPT.md
+
+preflight:
+  host_check: false    # a machine that does nothing else need not wait for its own load to fall
+
+on:
+  backlog_exhausted:
+    - do: { run: ["./scripts/notify.sh", "the todo directory is empty"] }
