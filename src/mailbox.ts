@@ -46,12 +46,16 @@ const DEFAULT_REPLIES: Record<ReplyReason, string> = {
  * answers with a default and records that it did.
  */
 export class Mailbox {
-  private nextId = 1;
-
+  /**
+   * `firstNumber` is where the ids of this process start. A process that starts at 1 reuses the ids of
+   * every earlier one (the journal of a real run holds `q1` nine times), and an answer file is named by
+   * nothing but its id, so one id must mean one ask for the life of the run directory.
+   */
   constructor(
     private readonly files: MailboxFiles,
     private readonly clock: Clock,
     private readonly timing: MailboxTiming = DEFAULT_TIMING,
+    private nextId: number = 1,
   ) {}
 
   /** One answer per question: the orchestrator's, or the Recommended (else first) option when it stays silent. */
@@ -116,6 +120,23 @@ export class Mailbox {
       await this.clock.sleep(this.timing.pollMs);
     }
   }
+}
+
+/**
+ * The number the next ask takes: one past the highest `q<n>` or `r<n>` the journal already holds, so an id
+ * is never used twice in one run directory.
+ *
+ * @example
+ * nextAskNumber([{ type: "needs_answer", id: "q4" }, { type: "needs_reply", id: "r2" }]); // => 5
+ */
+export function nextAskNumber(events: readonly LoopEvent[]): number {
+  let highest = 0;
+  for (const event of events) {
+    if (event.type !== "needs_answer" && event.type !== "needs_reply") continue;
+    const number = Number(String(event["id"]).slice(1));
+    if (Number.isInteger(number)) highest = Math.max(highest, number);
+  }
+  return highest + 1;
 }
 
 function defaultAnswerFor(question: Question): string {

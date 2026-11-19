@@ -13,7 +13,7 @@ import { readNextRow, type BacklogPorts } from "./backlog-source.ts";
 import { captureFirstLine, runCommand } from "./command-runner.ts";
 import { requiredValue } from "./flags.ts";
 import { GitCli } from "./git-probe.ts";
-import { DirectoryMailboxFiles, Mailbox } from "./mailbox.ts";
+import { DEFAULT_TIMING, DirectoryMailboxFiles, Mailbox, nextAskNumber } from "./mailbox.ts";
 import { planFollowUpOf, type LoopContext } from "./loop-context.ts";
 import {
   readHostReadings,
@@ -199,7 +199,7 @@ export async function main(argv: string[]): Promise<number> {
     commandOverride: null,
     runDir,
     git: new GitCli(args.repoRoot),
-    mailbox: new Mailbox(files, systemClock),
+    mailbox: new Mailbox(files, systemClock, DEFAULT_TIMING, nextAskNumber(await runDir.readEvents())),
     emit: (event) => files.appendEvent(event),
   };
   journalSignals({

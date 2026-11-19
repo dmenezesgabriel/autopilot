@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { loadWorkflow, DEFAULT_WORKFLOW_FILE } from "./workflow.ts";
+import { loadWorkflow, runDirNameOf, DEFAULT_WORKFLOW_FILE, WorkflowMissingError, type Workflow } from "./workflow.ts";
 import { selfCommand } from "./self-command.ts";
 import { GitCli } from "./git-probe.ts";
 import { buildReport, formatReport } from "./report.ts";
@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { renderUnit, unitNameFor } from "./service-unit.ts";
 import { requiredValue } from "./flags.ts";
 import { describeSummary, summarizeJournal } from "./journal-summary.ts";
+import { describeNextSession } from "./next-session.ts";
+import { checkAnswer, checkStop, type AnswerRequest, type LoopLiveness } from "./operator-checks.ts";
 import { RunDir, isProcessAlive } from "./run-dir.ts";
 
 const USAGE = `usage:
@@ -27,13 +29,37 @@ const USAGE = `usage:
                                       restarts a crash; install writes it, enabling it is yours to do
   report [--json]              per agent and outcome: iterations, commits, hours, cost, calls,
                                       compactions; restarts the loop did not choose; limit waits
-every command: --repo <dir> picks the repository (default: cwd), whose autopilot.config.json names the run
-directory; AUTOPILOT_RUN_DIR overrides it`;
+every command: --repo <dir> picks the repository (default: cwd), whose autopilot.yaml names the run
+directory; --run-dir <dir> or AUTOPILOT_RUN_DIR names it outright (needed only when autopilot.yaml is not YAML)`;
 
-async function status(runDir: RunDir): Promise<string> {
+async function livenessOf(runDir: RunDir): Promise<LoopLiveness> {
   const pid = await runDir.lockHolder();
+  return { pid, alive: pid !== null && isProcessAlive(pid) };
+}
+
+async function status(context: RunContext): Promise<string> {
+  const { pid, alive } = await livenessOf(context.runDir);
+  const summary = summarizeJournal(await context.runDir.readEvents());
+  return describeSummary(summary, pid, alive, await nextSessionLines(context));
+}
+
+/** Writes the answer or reply the loop waits on, after checking the journal and the lock say one does. */
+async function giveAnswer(runDir: RunDir, request: AnswerRequest, why: string | undefined): Promise<string> {
   const summary = summarizeJournal(await runDir.readEvents());
-  return describeSummary(summary, pid, pid !== null && isProcessAlive(pid));
+  const notes = checkAnswer(summary, await livenessOf(runDir), request);
+  const text = request.kind === "reply" ? request.values.join(" ") : request.values;
+  await runDir.writeAnswer(request.id, text, why);
+  return [`${request.kind === "reply" ? "replied" : "answered"} ${request.id}`, ...notes].join("\n");
+}
+
+async function stop(runDir: RunDir): Promise<string> {
+  const loop = await livenessOf(runDir);
+  const nothing = checkStop(loop);
+  if (nothing !== null) return nothing;
+  await runDir.requestStop();
+  const open = summarizeJournal(await runDir.readEvents()).open;
+  const now = open === null ? "between iterations" : `after iteration #${open.n}`;
+  return `stop requested: the loop (pid ${loop.pid}) exits ${now}`;
 }
 
 /** Splits `--why <reason>` off the front of an answer's arguments; the reason goes in the journal. */
@@ -93,17 +119,65 @@ export function splitWorkflow(argv: string[]): { workflow: string | null; rest: 
  * directory resolves it here, so `stop`, `answer` and `status` reach the directory the loop actually uses.
  */
 export async function runDirFor(repoRoot: string, workflowFlag: string | null = null): Promise<RunDir> {
+  const { runDir, workflow, problem } = await runContextFor(repoRoot, workflowFlag);
+  if (workflow === null) throw new Error(problem ?? "the workflow does not read");
+  return runDir;
+}
+
+/** What an operator command knows of a repository: its run directory always, its workflow when that reads. */
+export type RunContext = { runDir: RunDir; workflow: Workflow | null; problem: string | null };
+
+/**
+ * The run directory of a repository and, when it reads, the workflow that named it. A workflow that does
+ * not read still names its run directory unless it is not YAML at all, so `stop`, `answer` and `status`
+ * keep working while the loop runs on the workflow it last read; `problem` says why it does not read.
+ * `--run-dir` and AUTOPILOT_RUN_DIR name the directory outright, in that order of precedence.
+ */
+export async function runContextFor(repoRoot: string, workflowFlag: string | null = null, runDirFlag: string | null = null): Promise<RunContext> {
   const named = workflowFlag !== null;
   const file = resolve(repoRoot, named ? workflowFlag : DEFAULT_WORKFLOW_FILE);
-  const workflow = await loadWorkflow(file, named);
-  const path = process.env["AUTOPILOT_RUN_DIR"] ?? resolve(repoRoot, workflow.runDir);
-  return new RunDir(resolve(path));
+  const given = runDirFlag === null ? process.env["AUTOPILOT_RUN_DIR"] : resolve(runDirFlag);
+  try {
+    const workflow = await loadWorkflow(file, named);
+    return { runDir: runDirOf(repoRoot, workflow, given), workflow, problem: null };
+  } catch (error) {
+    if (error instanceof WorkflowMissingError) throw error;
+    const problem = (error as Error).message;
+    const name = given ?? (await runDirNameOf(file).catch(() => null));
+    if (name === null) {
+      throw new Error(`${problem}\nit does not read as YAML, so it cannot name the run directory either: say which with --run-dir <dir>`);
+    }
+    return { runDir: new RunDir(resolve(repoRoot, name)), workflow: null, problem };
+  }
+}
+
+/** The run directory a workflow names, unless `given` (the flag or AUTOPILOT_RUN_DIR) says another. */
+export function runDirOf(repoRoot: string, workflow: Workflow, given: string | undefined = process.env["AUTOPILOT_RUN_DIR"]): RunDir {
+  return new RunDir(resolve(given ?? resolve(repoRoot, workflow.runDir)));
+}
+
+/** Takes `--run-dir <dir>` off the arguments; null when none is named. */
+export function splitRunDir(argv: string[]): { runDir: string | null; rest: string[] } {
+  const at = argv.indexOf("--run-dir");
+  if (at === -1) return { runDir: null, rest: argv };
+  const runDir = requiredValue(argv, "--run-dir", "a run directory") ?? "";
+  return { runDir, rest: [...argv.slice(0, at), ...argv.slice(at + 2)] };
+}
+
+/** The lines that say what the next session runs on, or why that cannot be said while the workflow does not read. */
+async function nextSessionLines(context: RunContext): Promise<string[]> {
+  if (context.workflow === null) {
+    return [`next session: not worked out, because the workflow does not read: ${context.problem}`, "  a running loop keeps the workflow it last read; `autopilot validate` shows the error"];
+  }
+  return describeNextSession(context.runDir, context.workflow);
 }
 
 async function report(runDir: RunDir, repoRoot: string, json: boolean): Promise<string> {
+  const events = await runDir.readEvents();
+  if (events.length === 0) return `no iterations yet: ${runDir.path}/events.jsonl holds no events`;
   const git = new GitCli(repoRoot);
   const built = await buildReport({
-    events: await runDir.readEvents(),
+    events,
     headNow: await git.head(),
     commitsBetween: (from, to) => git.countCommits(from, to),
     transcripts: await readTranscripts(runDir.path),
@@ -126,34 +200,30 @@ export async function service(action: string, repoRoot: string, runArguments: st
 /** The operator commands: status, answer, reply, use, stop, report and service. */
 export async function runCtl(args: string[]): Promise<string> {
   const { repoRoot, rest: afterRepo } = splitRepo(args, process.cwd());
-  const { workflow, rest: argv } = splitWorkflow(afterRepo);
-  const runDir = await runDirFor(repoRoot, workflow);
+  const { workflow, rest: afterWorkflow } = splitWorkflow(afterRepo);
+  const { runDir: runDirFlag, rest: argv } = splitRunDir(afterWorkflow);
+  const context = await runContextFor(repoRoot, workflow, runDirFlag);
+  const { runDir } = context;
   const [command, id, ...rest] = argv;
   if (command === "service") return service(id ?? "", repoRoot, workflow === null ? rest : ["--workflow", resolve(repoRoot, workflow), ...rest]);
   if (command === "report") return report(runDir, repoRoot, argv.includes("--json"));
-  if (command === "status") return status(runDir);
+  if (command === "status") return status(context);
   if (command === "use") {
     if (argv[1] === "--reset") {
+      const had = (await runDir.readChoice().catch(() => ({}))) !== null;
       await runDir.clearChoice();
-      return "override removed: the workflow's harness, model and effort apply from the next session";
+      const lines = await nextSessionLines(context);
+      return [had ? "override removed" : "no override was set", ...lines].join("\n");
     }
     const choice = useArguments(argv.slice(1));
     await runDir.writeChoice(choice);
-    const said = [`harness ${choice.agent}`, choice.model && `model ${choice.model}`, choice.effort && `effort ${choice.effort}`].filter(Boolean).join(", ");
-    return `next session: ${said}; anything not said comes from the workflow`;
+    return (await nextSessionLines(context)).join("\n");
   }
-  if (command === "stop") {
-    await runDir.requestStop();
-    return "stop requested";
-  }
+  if (command === "stop") return stop(runDir);
   const { values, why } = splitWhy(rest);
-  if (command === "answer" && id && values.length > 0) {
-    await runDir.writeAnswer(id, values, why);
-    return `answered ${id}`;
-  }
-  if (command === "reply" && id && values.length > 0) {
-    await runDir.writeAnswer(id, values.join(" "), why);
-    return `replied ${id}`;
+  if ((command === "answer" || command === "reply") && id && values.length > 0) {
+    const kind = command === "answer" ? "question" : "reply";
+    return giveAnswer(runDir, { id, kind, values }, why);
   }
   throw new Error(
     `unknown or incomplete command "${argv.join(" ")}"\n${USAGE}`,

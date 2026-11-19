@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Mailbox } from "./mailbox.ts";
+import { Mailbox, nextAskNumber } from "./mailbox.ts";
 import { FakeClock, FakeMailboxFiles } from "./testing/fake-mailbox.ts";
 import {
   assertContains,
@@ -129,5 +129,44 @@ describe("Mailbox.askReply", () => {
 
     assertContains(reply, "exit_plan_mode");
     assertContains(files.eventTypes(), "reply_defaulted");
+  });
+});
+
+describe("ask ids stay unique for the life of a run directory", () => {
+  it("starts after the highest id the journal holds, across questions and replies", () => {
+    const events = [
+      { type: "needs_answer", id: "q1" },
+      { type: "needs_answer", id: "q4" },
+      { type: "needs_reply", id: "r2" },
+      { type: "answer_received", id: "q9" },
+    ];
+
+    assert.equal(nextAskNumber(events), 5);
+  });
+
+  it("starts at 1 for a journal with no ask, and ignores an id it cannot read", () => {
+    assert.equal(nextAskNumber([]), 1);
+    assert.equal(nextAskNumber([{ type: "needs_answer", id: "weird" }]), 1);
+  });
+
+  it("asks under the number it was given, so a restart does not reuse q1", async () => {
+    const files = new FakeMailboxFiles();
+    const clock = new FakeClock(() => files.answers.set("q5", { answer: ["zod"] }));
+
+    await new Mailbox(files, clock, TIMING, 5).askQuestions(QUESTIONS);
+
+    assertContainsEqual(files.events, { type: "needs_answer", id: "q5", questions: QUESTIONS });
+  });
+
+  it("does not take an answer left for an id of an earlier process as the answer to a new question", async () => {
+    const files = new FakeMailboxFiles();
+    files.answers.set("q1", { answer: ["zod"] });
+    const clock = new FakeClock((now) => {
+      if (now >= 2_000) files.answers.set("q2", { answer: ["valibot (Recommended)"] });
+    });
+
+    const answers = await new Mailbox(files, clock, TIMING, 2).askQuestions(QUESTIONS);
+
+    assert.deepEqual(answers, ["valibot (Recommended)"]);
   });
 });

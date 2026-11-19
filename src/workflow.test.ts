@@ -113,7 +113,7 @@ describe("loadWorkflow", () => {
 
   it("falls back to the defaults when an optional file is absent, and fails when a named one is", async () => {
     assert.equal((await loadWorkflow(join(dir, "absent.yaml"), false)).prompt, "prompt-execution.md");
-    await assert.rejects(() => loadWorkflow(join(dir, "absent.yaml"), true), /ENOENT/);
+    await assert.rejects(() => loadWorkflow(join(dir, "absent.yaml"), true), /workflow file .*absent\.yaml does not exist; `autopilot init` writes a starter one/);
   });
 
   it("reads JSON too, since JSON is YAML", async () => {

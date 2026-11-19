@@ -89,12 +89,15 @@ function groupLine(group: Group): string {
 
 const HEADER = "agent    outcome      iters  commits   hours  min/commit    cost $  calls/commit  compactions";
 
+/** Ways a run ends that its operator chose or the service manager caused; a halt or a death is not one. */
+const CHOSEN_ENDS: ReadonlySet<Restart["after"]> = new Set(["stopped", "signalled", "exhausted"]);
+
 function restartLines(restarts: Restart[]): string[] {
-  const unplanned = restarts.filter((restart) => restart.after !== "stop");
-  const lines = [`restarts not preceded by a deliberate stop: ${unplanned.length} of ${restarts.length}`];
+  const unplanned = restarts.filter((restart) => !CHOSEN_ENDS.has(restart.after));
+  const lines = [`restarts after a run that did not end by a stop, a signal or an empty backlog: ${unplanned.length} of ${restarts.length}`];
   for (const restart of unplanned) {
     const when = new Date(restart.atMs).toISOString().slice(0, 16);
-    lines.push(`  ${when}Z  after ${restart.after.padEnd(6)} silent ${hours(restart.silentMs).toFixed(1)} h before it`);
+    lines.push(`  ${when}Z  after ${restart.after.padEnd(8)} silent ${hours(restart.silentMs).toFixed(1)} h before it`);
   }
   return lines;
 }

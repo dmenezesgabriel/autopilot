@@ -70,7 +70,7 @@ Leftover detection reads `/proc`, so it sees nothing off Linux; the busy-host ch
 
 `limits.probe: cam` makes a Claude usage-limit wait end the first minute `cam status --json` shows the live account usable, instead of sleeping to the agent's reset time. It applies to Claude sessions only and, with it, a weekly limit is waited out instead of halting the loop.
 
-`wake` defaults to the decisions (`needs_answer`, `needs_reply`) and the events that need a person (`loop_halted`, `iteration_stalled`, `iteration_halted`, `iteration_crashed`, `possibly_hung`, `hung_cancelled`, `needs_answer_overdue`, `exit_plan_*_missing`, `background_watch_error`, `backlog_exhausted`). It leaves out reports such as `iteration_done`.
+`wake` defaults to the decisions (`needs_answer`, `needs_reply`) and the events that need a person (`loop_halted`, `iteration_stalled`, `iteration_halted`, `iteration_crashed`, `possibly_hung`, `hung_cancelled`, `needs_answer_overdue`, `exit_plan_*_missing`, `background_watch_error`, `backlog_exhausted`) and the alerts that only a person's edit can cure (`agent_choice_invalid`, `workflow_invalid`, `workflow_error`). It leaves out reports such as `iteration_done` and the alerts the loop already handled itself (`answer_defaulted`, `permission_requested`, `rate_limited`). `autopilot events` lists every event with its kind; each alert declares in the registry whether it wakes.
 
 ## Harness, model, effort and command
 

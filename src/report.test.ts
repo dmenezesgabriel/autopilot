@@ -61,7 +61,7 @@ describe("iterationsOf", () => {
   it("gives an interrupted iteration its last event as a lower bound on its end", () => {
     const rows = iterationsOf(JOURNAL, "zzz");
 
-    assert.equal(rows[1]?.endMs, T0 + 300 * 60_000);
+    assert.equal(rows[1]?.endMs, T0 + 90 * 60_000);
   });
 });
 
@@ -71,7 +71,7 @@ describe("restartsOf", () => {
 
     const restarts = restartsOf(events);
 
-    assert.deepEqual(restarts.map((restart) => restart.after), ["stop", "died"]);
+    assert.deepEqual(restarts.map((restart) => restart.after), ["stopped", "died"]);
     assert.equal(restarts[1]?.silentMs, 60 * 60_000);
   });
 });
@@ -127,7 +127,7 @@ describe("buildReport", () => {
     const text = formatReport(report);
 
     assert.match(text, /claude\s+done\s+1\s+3\s+0\.7\s+13\.0\s+1\.50/);
-    assert.match(text, /restarts not preceded by a deliberate stop: 1 of 1/);
+    assert.match(text, /restarts after a run that did not end by a stop, a signal or an empty backlog: 1 of 1/);
     assert.match(text, /limit waits: 0/);
   });
 });

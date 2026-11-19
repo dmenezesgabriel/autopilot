@@ -31,7 +31,7 @@ The workflow's `harness` and `harnesses` say it ([workflow.md](workflow.md#harne
 autopilot use devin --model swe-2-high --effort high --repo <repo>
 autopilot use claude --repo <repo>
 autopilot use --reset --repo <repo>   # the workflow decides again
-autopilot status --repo <repo>      # "next session: ..." is the choice, "session <id> on ..." is what ran
+autopilot status --repo <repo>      # "next session: ..." is worked out now from the workflow and choice.json (an override line says so); "session <id> on ..." is what the open session runs on
 ```
 
 A model or effort the harness does not offer halts the iteration with the offered values listed. `autopilot use` and the flags of `run` write `choice.json`; whatever it leaves unsaid comes from the workflow, and then from the harness's own default.
@@ -40,7 +40,7 @@ A model or effort the harness does not offer halts the iteration with the offere
 
 `events.jsonl` is append-only and holds every question, answer, session, mode change, background command, limit wait and iteration outcome. `autopilot status` rebuilds from it. A new orchestrator session starts with `autopilot status` and `autopilot pending`, re-arms the Monitor, and answers what it lists. If the loop died mid-iteration, the next start journals `iteration_interrupted` and opens a new session; nothing in the tree is discarded. Each session's frames are in `<run dir>/acp-<timestamp>.jsonl`; never delete the run directory while a loop runs.
 
-`autopilot report --repo <repo>` is the measurement: per agent and outcome, iterations, commits (counted from the heads the journal recorded), hours, Claude cost, Devin calls per commit, compactions; the restarts the loop did not choose; the limit waits and how many the probe ended early.
+`autopilot report --repo <repo>` is the measurement (an interrupted or crashed iteration counts to its last activity, never to the restart that recorded it): per agent and outcome, iterations, commits (counted from the heads the journal recorded), hours, Claude cost, Devin calls per commit, compactions; the restarts after a run that did not end by a stop, a signal or an empty backlog; the limit waits and how many the probe ended early.
 
 ## Keeping the cost low
 
@@ -56,7 +56,7 @@ Measured on three loops (see [rationale.md](rationale.md)), the orchestrator ses
 | Event | Meaning | Do |
 | --- | --- | --- |
 | `iteration_started`, `iteration_done` | One session began; one ended with a new commit and a clean tree | Report the commit in one line |
-| `needs_answer {id, questions}` | The agent asked a multiple-choice question and waits | `autopilot answer <id> --why "<evidence>" "<label>" ...`, one label per question; `--why` is journaled. A label that is not an offered option is sent as the question's own "Other" text. ESCALATE when it needs the user |
+| `needs_answer {id, questions}` | The agent asked a multiple-choice question and waits | `autopilot answer <id> --why "<evidence>" "<label>" ...`, one label per question; `--why` is journaled. A label that is not an offered option is sent as the question's own "Other" text (the command says so). The command refuses an id that nothing waits on, a reply to a question, a wrong number of labels, and any answer when no loop runs, and writes nothing then. Ids are unique in a run directory (`q5` is never asked twice). ESCALATE when it needs the user |
 | `needs_answer_overdue` | Ten minutes without an answer | ESCALATE. At 60 minutes the loop answers with the option marked Recommended, else the first, and logs `answer_defaulted` |
 | `needs_reply {id, why, lastMessage}` | The agent stopped in plan mode, or in bypass with no commit or a dirty tree | `autopilot reply <id> --why "<reason>" "<text>"`. At 10 minutes the loop sends a fixed nudge and logs `reply_defaulted` |
 | `awaiting_work` | The agent ended its turn while a background command it started still runs | Nothing: the loop watches for the exit, then tells the agent how it ended |

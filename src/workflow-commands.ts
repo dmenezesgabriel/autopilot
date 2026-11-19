@@ -1,6 +1,7 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { runDirFor, splitRepo } from "./ctl.ts";
+import { runDirFor, runDirOf, splitRepo } from "./ctl.ts";
+import { describeNextSession } from "./next-session.ts";
 import { EVENTS, EVENT_NAMES } from "./event-registry.ts";
 import { requiredValue } from "./flags.ts";
 import { isIgnoredByGit } from "./git-probe.ts";
@@ -26,7 +27,8 @@ export async function validate(args: string[]): Promise<string> {
   const { repoRoot, workflowPath } = locate(args);
   const workflow = await loadWorkflow(workflowPath, true);
   const warning = await runDirWarning(repoRoot, workflow.runDir);
-  return [`${workflowPath}: ok (schema version ${workflow.schemaVersion})`, ...describeWorkflow(workflow), ...(warning === null ? [] : [warning])].join("\n");
+  const next = await describeNextSession(runDirOf(repoRoot, workflow), workflow);
+  return [`${workflowPath}: ok (schema version ${workflow.schemaVersion})`, ...describeWorkflow(workflow), ...next.map((line) => `  ${line.trimStart()}`), ...(warning === null ? [] : [warning])].join("\n");
 }
 
 /**

@@ -1,6 +1,8 @@
+import { ITERATION_OUTCOME, LOOP_END, type IterationOutcome, type LoopEnd } from "./event-registry.ts";
 import type { LoopEvent } from "./mailbox.ts";
 
-export type Outcome = "done" | "stalled" | "halted" | "yielded" | "interrupted" | "open";
+/** How an iteration ended, as the registry words it, or "open" when the journal has no ending for it. */
+export type Outcome = IterationOutcome | "open";
 
 /** One loop iteration as the journal recorded it; commits and transcript figures are joined in afterwards. */
 export type IterationRecord = {
@@ -11,19 +13,11 @@ export type IterationRecord = {
   outcome: Outcome;
   reason: string | null;
   startMs: number;
-  /** The terminal event's time; for an interrupted or open iteration the last event it had (a lower bound). */
+  /** The terminal event's time; for an interrupted or open iteration the time of the last thing it did (a lower bound). */
   endMs: number;
   headStart: string;
   /** Where the commit range ends: the head the loop recorded when done, else where the next iteration began. */
   headEnd: string | null;
-};
-
-const TERMINAL: Record<string, Outcome> = {
-  iteration_done: "done",
-  iteration_stalled: "stalled",
-  iteration_halted: "halted",
-  iteration_yielded: "yielded",
-  iteration_interrupted: "interrupted",
 };
 
 const atMs = (event: LoopEvent): number => Date.parse(String(event["at"]));
@@ -46,10 +40,9 @@ export function iterationsOf(events: LoopEvent[], headNow: string): IterationRec
 
 function recordOf(n: number, window: LoopEvent[], nextHead: string): IterationRecord {
   const started = window[0] as LoopEvent;
-  const terminal = window.find((event) => event.type in TERMINAL);
-  const outcome = terminal ? (TERMINAL[terminal.type] as Outcome) : "open";
+  const terminal = window.find((event) => event.type in ITERATION_OUTCOME);
+  const outcome: Outcome = terminal ? (ITERATION_OUTCOME[terminal.type] as IterationOutcome) : "open";
   const session = window.find((event) => event.type === "session_started");
-  const last = window[window.length - 1] as LoopEvent;
   return {
     n,
     row: typeof started["row"] === "string" ? started["row"] : null,
@@ -58,17 +51,32 @@ function recordOf(n: number, window: LoopEvent[], nextHead: string): IterationRe
     outcome,
     reason: typeof terminal?.["reason"] === "string" ? terminal["reason"] : null,
     startMs: atMs(started),
-    endMs: atMs(terminal ?? last),
+    endMs: endOf(window, terminal),
     headStart: String(started["head"]),
     headEnd: outcome === "done" ? String(terminal?.["head"]) : nextHead,
   };
 }
 
+/**
+ * When the iteration stopped working. A finished one ends at its own closing event. An interrupted or
+ * open one has none that says when, and the events after it are not its own: the next loop process writes
+ * `loop_started`, `iteration_interrupted` and its own waits (`preflight_wait` fills a busy host's hours)
+ * into the same stretch of the journal, hours after the one that died (a real run recorded 21.9 h for an
+ * iteration whose last event came 1.1 h in). A new `loop_started` means the old process is gone, so the
+ * iteration ends at the last event before it.
+ */
+function endOf(window: LoopEvent[], terminal: LoopEvent | undefined): number {
+  if (terminal !== undefined && terminal.type !== "iteration_interrupted") return atMs(terminal);
+  const restart = window.findIndex((event, at) => at > 0 && event.type === "loop_started");
+  const own = restart === -1 ? window : window.slice(0, restart);
+  return atMs(own[own.length - 1] as LoopEvent);
+}
+
 /** One restart of the loop and what preceded it. */
 export type Restart = {
   atMs: number;
-  /** What the journal's previous event was: a deliberate `stop`, a `loop_halted`, or anything else (the loop died). */
-  after: "stop" | "halted" | "died";
+  /** How the previous run ended, in the registry's words, or "died" when its last event is not one that ends a loop. */
+  after: LoopEnd | "died";
   /** The silence before the restart: an upper bound on the downtime, since a quiet loop writes nothing. */
   silentMs: number;
 };
@@ -78,7 +86,7 @@ export function restartsOf(events: LoopEvent[]): Restart[] {
   events.forEach((event, at) => {
     const before = events[at - 1];
     if (event.type !== "loop_started" || before === undefined) return;
-    const after = before.type === "stop" ? "stop" : before.type === "loop_halted" ? "halted" : "died";
+    const after = LOOP_END[before.type] ?? "died";
     restarts.push({ atMs: atMs(event), after, silentMs: atMs(event) - atMs(before) });
   });
   return restarts;

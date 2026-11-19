@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -61,6 +61,69 @@ describe("an orchestrator answering through the CLI", () => {
   });
 });
 
+describe("answers that no ask waits on", () => {
+  const QUESTION = { header: "Color", question: "Which color?", options: ["blue", "red"] };
+
+  it("are refused by the CLI while the real question still gets its answer", async () => {
+    const refusals: string[] = [];
+    const result = await run({
+      workflow: "",
+      sessions: [{ question: QUESTION, plan: "Ship R-1.", work: SHIP_R1 }],
+      files: ONE_ROW,
+      during: async (live) => {
+        const asked = await live.waitForEvent("needs_answer");
+        const id = String(asked["id"]);
+        for (const attempt of [["answer", "q99", "blue"], ["reply", id, "blue"], ["answer", id, "blue", "red"]]) {
+          await live.cli(...attempt).then(() => refusals.push("accepted"), (error: Error) => refusals.push(error.message));
+        }
+        await live.cli("answer", id, "blue");
+      },
+    });
+
+    assert.match(refusals[0] ?? "", /"q99" is not waiting for an answer; waiting: q1 \(question\)/);
+    assert.match(refusals[1] ?? "", /q1 is a question: use `autopilot answer q1`/);
+    assert.match(refusals[2] ?? "", /q1 asks 1 question and takes one label for each, got 2/);
+    assert.deepEqual(result.events.find((event) => event["type"] === "answer_received")?.["answer"], ["blue"]);
+    assert.equal(result.exitCode, 0);
+  });
+
+  it("cannot be taken by a later question, because a new loop process numbers its asks after the journal's", async () => {
+    const earlier = ["q1", "q2", "q3"].map((id) => JSON.stringify({ at: "2026-11-17T10:00:00Z", type: "needs_answer", id, questions: [] }));
+    const result = await run({
+      workflow: "",
+      sessions: [{ question: QUESTION, plan: "Ship R-1.", work: SHIP_R1 }],
+      files: ONE_ROW,
+      beforeStart: async (dir) => {
+        await mkdir(join(dir, ".run/answers"), { recursive: true });
+        await writeFile(join(dir, ".run/events.jsonl"), `${earlier.join("\n")}\n`);
+        // What a mistyped or late `answer q1` used to leave behind, waiting for the next process's first question.
+        await writeFile(join(dir, ".run/answers/q1.json"), JSON.stringify({ answer: ["red"] }));
+      },
+      during: async (live) => {
+        const asked = await newestAsk(live.dir, 4);
+        await live.cli("answer", asked, "blue");
+      },
+    });
+
+    const asks = result.events.filter((event) => event["type"] === "needs_answer").map((event) => event["id"]);
+    assert.deepEqual(asks, ["q1", "q2", "q3", "q4"]);
+    assert.deepEqual(result.events.find((event) => event["type"] === "answer_received")?.["answer"], ["blue"]);
+    assert.equal(result.exitCode, 0);
+  });
+});
+
+/** Waits until the journal holds the ask numbered `number`, and returns its id. */
+async function newestAsk(dir: string, number: number): Promise<string> {
+  const wanted = `q${number}`;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const text = await readFile(join(dir, ".run/events.jsonl"), "utf8").catch(() => "");
+    if (text.includes(`"id":"${wanted}"`)) return wanted;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`the loop never asked ${wanted}`);
+}
+
 describe("a loop that dies mid-session", () => {
   it("is restarted into the unfinished row, which the journal says was interrupted, and the row ships", async () => {
     let second: { code: number | null; stderr: string } = { code: null, stderr: "" };
@@ -118,6 +181,22 @@ describe("`autopilot stop`", () => {
     assert.equal(result.exitCode, 0);
     assert.deepEqual(result.commits, ["ship R-1"]);
     assert.equal(typesOf(result).at(-1), "stop");
+  });
+});
+
+describe("a model the agent does not offer", () => {
+  it("halts the loop before any work, naming the model, so a typo in `autopilot use` costs no session", async () => {
+    const result = await run({
+      workflow: "harnesses:\n  claude: { model: no-such-model }\n",
+      sessions: [{ plan: "Ship R-1.", work: SHIP_R1 }],
+      files: ONE_ROW,
+    });
+
+    const halted = result.events.find((event) => event["type"] === "iteration_halted");
+    assert.match(String(halted?.["reason"]), /--model "no-such-model" cannot be applied: the agent reports no model option/);
+    assert.equal(typesOf(result).at(-1), "loop_halted");
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(result.commits, []);
   });
 });
 

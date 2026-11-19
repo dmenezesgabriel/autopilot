@@ -1,4 +1,5 @@
 import { describeChoice, type AgentChoice } from "./agent-choice.ts";
+import { ITERATION_OUTCOME, LOOP_END, type LoopEnd } from "./event-registry.ts";
 
 export type JournalEvent = {
   at: string;
@@ -6,11 +7,15 @@ export type JournalEvent = {
   [detail: string]: unknown;
 };
 
+/** One question of a `needs_answer` event, as `autopilot answer` needs it to check an answer. */
+export type AskedQuestion = { header: string; question: string; options: string[] };
 export type PendingAsk = {
   id: string;
   kind: "question" | "reply";
   since: string;
   overdue: boolean;
+  /** The questions a `question` waits on, one answer each; empty for a reply. */
+  questions: AskedQuestion[];
 };
 export type Decision = {
   at: string;
@@ -39,29 +44,14 @@ export type OpenIteration = {
   pending: PendingAsk[];
   rateLimitedUntil: string | null;
 };
-export type LoopStatus =
-  | "never_started"
-  | "running"
-  | "halted"
-  | "exhausted"
-  | "stopped";
+/** How the loop stands: before its first start, running, or how its last run ended (the registry's `ends.loop` words). */
+export type LoopStatus = "never_started" | "running" | LoopEnd;
 export type JournalSummary = {
   loop: LoopStatus;
   haltReason: string | null;
-  /** The agent, model and effort the next session uses; null before the loop ever started. */
-  choice: AgentChoice | null;
   open: OpenIteration | null;
   finished: FinishedIteration[];
   decisions: Decision[];
-};
-
-const OUTCOMES: Record<string, string> = {
-  iteration_done: "done",
-  iteration_stalled: "stalled",
-  iteration_halted: "halted",
-  iteration_yielded: "yielded",
-  iteration_crashed: "crashed",
-  iteration_interrupted: "interrupted",
 };
 
 /**
@@ -76,7 +66,6 @@ export function summarizeJournal(events: JournalEvent[]): JournalSummary {
   const summary: JournalSummary = {
     loop: "never_started",
     haltReason: null,
-    choice: null,
     open: null,
     finished: [],
     decisions: [],
@@ -95,28 +84,22 @@ function applyLoopEvent(summary: JournalSummary, event: JournalEvent): void {
   if (event.type === "loop_started") {
     summary.loop = "running";
     summary.haltReason = null;
-    summary.choice = choiceOf(event);
+    return;
   }
-  if (event.type === "agent_choice_changed") {
-    summary.choice = choiceOf(event["to"] as JournalEvent);
-  }
-  if (event.type === "loop_halted") {
-    summary.loop = "halted";
-    summary.haltReason = String(event["reason"]);
-  }
-  if (event.type === "backlog_exhausted") summary.loop = "exhausted";
-  if (event.type === "stop") summary.loop = "stopped";
+  const end = LOOP_END[event.type];
+  if (end === undefined) return;
+  summary.loop = end;
+  if (event.type === "loop_halted") summary.haltReason = String(event["reason"]);
 }
 
-/** The agent, model and effort an event carries; a journal from before they were recorded reads as claude's defaults. */
-function choiceOf(event: JournalEvent): AgentChoice {
-  const text = (value: unknown): string | null =>
-    typeof value === "string" ? value : null;
-  return {
-    agent: text(event["agent"]) ?? "claude",
-    model: text(event["model"]),
-    effort: text(event["effort"]),
-  };
+/**
+ * The agent, model and effort a `session_started` event carries. An event that does not carry an agent
+ * is not read as any: the journal says nothing there, and a default would be a guess.
+ */
+function ranOnOf(event: JournalEvent): AgentChoice | null {
+  const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
+  const agent = text(event["agent"]);
+  return agent === null ? null : { agent, model: text(event["model"]), effort: text(event["effort"]) };
 }
 
 function applyIterationEvent(
@@ -140,7 +123,7 @@ function applyIterationEvent(
   }
   const open = summary.open;
   if (!open) return;
-  if (event.type in OUTCOMES) return finishIteration(summary, open, event);
+  if (event.type in ITERATION_OUTCOME) return finishIteration(summary, open, event);
   trackSession(open, event);
 }
 
@@ -152,7 +135,7 @@ function finishIteration(
   summary.finished.push({
     n: open.n,
     row: open.row,
-    outcome: OUTCOMES[event.type] ?? event.type,
+    outcome: ITERATION_OUTCOME[event.type] ?? event.type,
     detail: String(event["head"] ?? event["reason"] ?? ""),
     startedAt: open.startedAt,
     endedAt: event.at,
@@ -163,7 +146,7 @@ function finishIteration(
 function trackSession(open: OpenIteration, event: JournalEvent): void {
   if (event.type === "session_started") {
     open.sessionId = String(event["sessionId"]);
-    open.ranOn = typeof event["agent"] === "string" ? choiceOf(event) : null;
+    open.ranOn = ranOnOf(event);
   }
   if (event.type === "mode_changed") open.mode = String(event["mode"]);
   if (event.type === "rate_limited")
@@ -186,7 +169,8 @@ function applyAskEvent(summary: JournalSummary, event: JournalEvent): void {
   const id = String(event["id"] ?? "");
   if (open && (event.type === "needs_answer" || event.type === "needs_reply")) {
     const kind = event.type === "needs_answer" ? "question" : "reply";
-    open.pending.push({ id, kind, since: event.at, overdue: false });
+    const questions = kind === "question" ? askedQuestionsOf(event["questions"]) : [];
+    open.pending.push({ id, kind, since: event.at, overdue: false, questions });
   }
   if (open && event.type === "needs_answer_overdue") {
     for (const ask of open.pending) if (ask.id === id) ask.overdue = true;
@@ -203,6 +187,17 @@ function applyAskEvent(summary: JournalSummary, event: JournalEvent): void {
   });
 }
 
+function askedQuestionsOf(raw: unknown): AskedQuestion[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry: Record<string, unknown>) => ({
+    header: String(entry["header"] ?? ""),
+    question: String(entry["question"] ?? ""),
+    options: Array.isArray(entry["options"])
+      ? entry["options"].map((option: Record<string, unknown>) => String(option["label"]))
+      : [],
+  }));
+}
+
 const DECISION_EVENTS: Record<string, Decision["how"] | undefined> = {
   answer_received: "answered",
   reply_received: "answered",
@@ -210,32 +205,40 @@ const DECISION_EVENTS: Record<string, Decision["how"] | undefined> = {
   reply_defaulted: "defaulted",
 };
 
-/** Plain-text report for `ctl status`; `pidAlive` says whether the process that wrote the journal still runs. */
+const RECENT = 5;
+
+/**
+ * Plain-text report for `autopilot status`; `pidAlive` says whether the process that wrote the journal
+ * still runs. `nextSession` is worked out by the caller from the files that decide it, not read from the
+ * journal, which only records what an earlier session ran on.
+ */
 export function describeSummary(
   summary: JournalSummary,
   pid: number | null,
   pidAlive: boolean,
+  nextSession: readonly string[] = [],
 ): string {
   const lines = [
     `loop: ${summary.loop}${pidNote(pid, pidAlive)}${haltNote(summary)}`,
+    ...nextSession,
   ];
-  if (summary.choice) {
-    lines.push(`next session: ${describeChoice(summary.choice)}`);
-  }
   if (summary.open) lines.push(...describeOpen(summary.open));
-  const recent = summary.finished.slice(-5);
-  lines.push(`finished iterations: ${summary.finished.length}`);
-  for (const done of recent) {
+  lines.push(countLine("finished iterations", summary.finished.length));
+  for (const done of summary.finished.slice(-RECENT)) {
     lines.push(`  #${done.n} ${done.outcome} ${done.detail} (${done.row})`);
   }
-  lines.push(`decisions: ${summary.decisions.length}`);
-  for (const decision of summary.decisions.slice(-5)) {
+  lines.push(countLine("decisions", summary.decisions.length));
+  for (const decision of summary.decisions.slice(-RECENT)) {
     const reason = decision.why ? ` because ${decision.why}` : "";
-    lines.push(
-      `  ${decision.id} ${decision.how} ${JSON.stringify(decision.answer)}${reason}`,
-    );
+    const answer = JSON.stringify(decision.answer);
+    lines.push(`  ${decision.at.slice(0, 16)}Z ${decision.id} ${decision.how} ${answer}${reason}`);
   }
   return lines.join("\n");
+}
+
+/** A count, and when only the latest are listed below it, how many. */
+function countLine(label: string, total: number): string {
+  return total > RECENT ? `${label}: ${total} (the last ${RECENT} below)` : `${label}: ${total}`;
 }
 
 function pidNote(pid: number | null, alive: boolean): string {

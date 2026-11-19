@@ -59,6 +59,7 @@ export const WORKFLOW_SCHEMA_VERSION = 1;
 
 export const DEFAULT_WORKFLOW_FILE = "autopilot.yaml";
 
+const DEFAULT_RUN_DIR_NAME = ".autopilot-run";
 const TOP_KEYS = ["version", "prompt", "run_dir", "backlog", "harness", "harnesses", "plan", "rules", "preflight", "limits", "wake", "on"] as const;
 
 /**
@@ -78,7 +79,7 @@ export function parseWorkflow(source: string, name: string): Workflow {
   return {
     schemaVersion,
     prompt: text(raw, "prompt", name, "prompt-execution.md"),
-    runDir: text(raw, "run_dir", name, ".autopilot-run"),
+    runDir: text(raw, "run_dir", name, DEFAULT_RUN_DIR_NAME),
     backlog: parseBacklog(raw, name),
     harness: harnessName(raw["harness"] ?? null, `${name}.harness`),
     harnesses: harnessTable(raw, name),
@@ -207,6 +208,26 @@ function wakeEvents(raw: Obj, name: string): EventName[] {
   });
 }
 
+/** A workflow file that was asked for and is not there, as opposed to one that is there and does not read. */
+export class WorkflowMissingError extends Error {}
+
+/**
+ * The run directory a workflow file names, read from the YAML alone. The loop keeps its previous workflow
+ * when an edit stops reading, so the operator commands that only need the directory (`stop`, `answer`,
+ * `status`) must not fail on the same edit: a stop that needs a valid workflow is out of reach exactly when
+ * the workflow was just broken. A file that is not YAML at all has no such answer and throws.
+ *
+ * @example
+ * await runDirNameOf("autopilot.yaml"); // => "scripts/loop/.run", even when `on:` below it has a typo
+ */
+export async function runDirNameOf(path: string): Promise<string> {
+  const raw = readYaml(await readFile(path, "utf8"), path);
+  const name = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>)["run_dir"] : undefined;
+  if (name === undefined) return DEFAULT_RUN_DIR_NAME;
+  if (typeof name !== "string") throw new Error(`${path}: run_dir must be text, got ${JSON.stringify(name)}`);
+  return name;
+}
+
 /** Reads the file at `path`. A missing file is the defaults unless the caller named it, since a repository may need no workflow at all. */
 export async function loadWorkflow(path: string, required: boolean): Promise<Workflow> {
   try {
@@ -214,6 +235,7 @@ export async function loadWorkflow(path: string, required: boolean): Promise<Wor
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
     if (missing && !required) return parseWorkflow(`version: ${WORKFLOW_SCHEMA_VERSION}\n`, path);
+    if (missing) throw new WorkflowMissingError(`workflow file ${path} does not exist; \`autopilot init\` writes a starter one`);
     throw error;
   }
 }
