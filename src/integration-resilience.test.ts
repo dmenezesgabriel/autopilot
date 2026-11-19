@@ -200,6 +200,26 @@ describe("a model the agent does not offer", () => {
   });
 });
 
+describe("restarting a loop with the flags it was started with", () => {
+  it("keeps the model an operator chose with `autopilot use`, because a flag overrides only the field it names", async () => {
+    const result = await run({
+      workflow: "",
+      args: ["--harness", "claude"],
+      sessions: [{ plan: "Ship R-1.", work: SHIP_R1 }],
+      files: ONE_ROW,
+      beforeStart: async (dir) => {
+        await mkdir(join(dir, ".run"), { recursive: true });
+        await writeFile(join(dir, ".run/choice.json"), JSON.stringify({ agent: "claude", model: "chosen-with-use", effort: null }));
+      },
+    });
+
+    // The scripted agent offers no models, so the session is refused; what matters is what the loop resolved to start with.
+    const started = result.events.find((event) => event["type"] === "loop_started");
+    assert.equal(started?.["model"], "chosen-with-use");
+    assert.deepEqual(JSON.parse(await result.read(".run/choice.json")), { agent: "claude", model: "chosen-with-use", effort: null });
+  });
+});
+
 describe("a weekly usage limit", () => {
   // The same session carries on after the wait, so the work it does then is the one that ships the row.
   const limited = (): LoopCase["sessions"] => [{ plan: "Ship R-1.", rateLimit: { resetsInSeconds: 5, type: "seven_day" }, work: SHIP_R1 }];

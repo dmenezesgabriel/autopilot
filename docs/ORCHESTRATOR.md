@@ -25,7 +25,7 @@ Start it from a shell whose PATH has `claude-agent-acp` (or add `--agent-command
 
 ## Choosing the agent
 
-The workflow's `harness` and `harnesses` say it ([workflow.md](workflow.md#harness-model-effort-and-command)); `--harness claude|devin`, `--model <id>`, `--effort <value>` override it at start, one field at a time. To switch while the loop runs, change the choice between iterations, never inside one:
+The workflow's `harness` and `harnesses` say it ([workflow.md](workflow.md#harness-model-effort-and-command)); `--harness claude|devin`, `--model <id>`, `--effort <value>` override it at start, one field at a time: a flag changes only the field it names and keeps the rest of the override `autopilot use` set, except that naming another harness drops the old model and effort. A restart needs no flag when `autopilot.yaml` already names the harness. To switch while the loop runs, change the choice between iterations, never inside one:
 
 ```sh
 autopilot use devin --model swe-2-high --effort high --repo <repo>

@@ -80,3 +80,29 @@ describe("overrideFromFlags", () => {
     assert.deepEqual(overrideFromFlags(parse(["--harness", "devin", "--effort", "high"])), { agent: "devin", model: null, effort: "high" });
   });
 });
+
+describe("overrideFromFlags on top of the override already in choice.json", () => {
+  const chosen = { agent: "devin", model: "swe-2-high", effort: "high" };
+
+  it("keeps the model and effort an operator chose when a restart repeats the same harness, which is what the orchestrator's start command does", () => {
+    assert.deepEqual(overrideFromFlags(parse(["--harness", "devin"]), chosen), chosen);
+  });
+
+  it("changes only the field a flag names", () => {
+    assert.deepEqual(overrideFromFlags(parse(["--model", "swe-2-flash-high"]), chosen), { agent: "devin", model: "swe-2-flash-high", effort: "high" });
+    assert.deepEqual(overrideFromFlags(parse(["--effort", "low"]), chosen), { agent: "devin", model: "swe-2-high", effort: "low" });
+  });
+
+  it("drops the old model and effort when a flag switches the harness, since the other harness may not offer them", () => {
+    assert.deepEqual(overrideFromFlags(parse(["--harness", "claude"]), chosen), { agent: "claude", model: null, effort: null });
+    assert.deepEqual(overrideFromFlags(parse(["--harness", "claude", "--model", "haiku"]), chosen), { agent: "claude", model: "haiku", effort: null });
+  });
+
+  it("does not carry fields of an override that named no harness over to a harness the flag names", () => {
+    assert.deepEqual(overrideFromFlags(parse(["--harness", "devin"]), { agent: null, model: "sonnet", effort: null }), { agent: "devin", model: null, effort: null });
+  });
+
+  it("writes nothing when no flag chooses, so an existing override is left alone", () => {
+    assert.equal(overrideFromFlags(parse(["--repo", "/x"]), chosen), null);
+  });
+});

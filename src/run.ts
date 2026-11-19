@@ -74,10 +74,29 @@ function harnessFlag(argv: string[]): string | null {
   return at === -1 ? null : profileFor(argv[at + 1]).name;
 }
 
-/** The override the flags make; null when none of them chooses. A flag overrides the workflow for the field it names only. */
-export function overrideFromFlags(args: { harness: string | null; model: string | null; effort: string | null }): ChoiceOverride | null {
+/**
+ * The override the start flags make, on top of the one already in `choice.json`; null when no flag chooses.
+ * A flag overrides the field it names and leaves the others as they are, so restarting a loop with
+ * `--harness devin` keeps the model an operator chose with `autopilot use` (writing the flags alone erased
+ * it, and the next session ran on the harness's default model without any message). The exception is a
+ * flag that switches the harness: the old model and effort belonged to the other harness, which may not
+ * offer them, so they go, as they do for `autopilot use`.
+ *
+ * @example
+ * overrideFromFlags({ harness: "devin", model: null, effort: null }, { agent: "devin", model: "swe-2-high", effort: null });
+ * // => { agent: "devin", model: "swe-2-high", effort: null }
+ */
+export function overrideFromFlags(
+  args: { harness: string | null; model: string | null; effort: string | null },
+  existing: ChoiceOverride | null = null,
+): ChoiceOverride | null {
   if (args.harness === null && args.model === null && args.effort === null) return null;
-  return { agent: args.harness, model: args.model, effort: args.effort };
+  const carries = existing !== null && (args.harness === null || existing.agent === args.harness);
+  return {
+    agent: args.harness ?? existing?.agent ?? null,
+    model: args.model ?? (carries ? existing.model : null),
+    effort: args.effort ?? (carries ? existing.effort : null),
+  };
 }
 
 const backlogPorts: BacklogPorts = {
@@ -209,7 +228,7 @@ export async function main(argv: string[]): Promise<number> {
     exit: (code) => process.exit(code),
   });
   try {
-    const flagged = overrideFromFlags(args);
+    const flagged = overrideFromFlags(args, await runDir.readChoice().catch(() => null));
     if (flagged !== null) await runDir.writeChoice(flagged);
     const choice = resolveChoice(await runDir.readChoice(), context.workflow, DEFAULT_AGENT);
     context.commandOverride = args.agentCommand === null ? null : { agent: choice.agent, command: args.agentCommand };

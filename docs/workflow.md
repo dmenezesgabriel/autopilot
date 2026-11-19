@@ -90,7 +90,7 @@ Each of the four resolves on its own, highest first:
 | Source | How it is given | Lifetime |
 | --- | --- | --- |
 | `autopilot use <harness> [--model <id>] [--effort <value>]` | an operator, while the loop runs | until `autopilot use --reset` |
-| flags of `autopilot run`: `--harness` (or `--agent`), `--model`, `--effort`, `--agent-command` | an operator, at start | `run` writes the first three to the same override, so they last until `use --reset`; `--agent-command` lasts for that process |
+| flags of `autopilot run`: `--harness` (or `--agent`), `--model`, `--effort`, `--agent-command` | an operator, at start | `run` writes the first three into the same override, changing only the fields named and keeping the rest of what `use` set (so restarting with `--harness devin` keeps the model; naming a different harness drops the old model and effort), so they last until `use --reset`; `--agent-command` lasts for that process |
 | the workflow's `harnesses.<harness>` and `harness` | the file, re-read every iteration | until edited |
 | the harness's own default | | |
 
