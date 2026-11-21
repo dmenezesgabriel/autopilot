@@ -25,7 +25,7 @@ type PermissionParams = {
   toolCall?: { toolCallId?: string };
   options?: PermissionOption[];
 };
-type ToolCall = { title: string; kind: string };
+type ToolCall = { title: string; kind: string; command: string | null };
 
 const SWITCH_MODE_KIND = "switch_mode";
 
@@ -80,7 +80,23 @@ export class DevinDialect implements AgentDialect {
 
   signalsFrom(method: string, params: unknown): AgentSignal[] {
     this.rememberToolCall(method, params);
-    return signalsFrom(method, params);
+    return signalsFrom(method, params).map((signal) =>
+      this.joinSpawnedCommand(signal),
+    );
+  }
+
+  /**
+   * The exec tool_call's `rawInput.command` is the string `bash -c` is handed —
+   * the argv the kernel's process table carries. `backgroundCommand` can be a
+   * rewritten form (measured: a `| tail -N` suffix dropped), so the liveness
+   * probe needs the spawned form as a second candidate.
+   */
+  private joinSpawnedCommand(signal: AgentSignal): AgentSignal {
+    if (signal.type !== "background_started" || signal.toolCallId === null) {
+      return signal;
+    }
+    const command = this.toolCalls.get(signal.toolCallId)?.command ?? null;
+    return { ...signal, rawCommand: command };
   }
 
   private rememberToolCall(method: string, params: unknown): void {
@@ -92,6 +108,7 @@ export class DevinDialect implements AgentDialect {
           toolCallId?: string;
           title?: string;
           kind?: string;
+          rawInput?: { command?: string };
         };
       }
     ).update;
@@ -99,6 +116,7 @@ export class DevinDialect implements AgentDialect {
     this.toolCalls.set(update.toolCallId, {
       title: update.title ?? "",
       kind: update.kind ?? "",
+      command: update.rawInput?.command ?? null,
     });
   }
 }

@@ -274,4 +274,52 @@ describe("Devin signals", () => {
     assert.deepEqual(onSignal.calls, [[{ type: "mode_changed", mode: "bypass" }]]);
     assert.equal(onFrame.calls.length, 1);
   });
+
+  // The liveness probe matches a shell against argv, and argv holds the
+  // spawned command, not the rewritten `backgroundCommand` devin reports.
+  it("joins the tool call's spawned command onto the background start", () => {
+    const { channel, onSignal } = connect();
+
+    channel.deliver({
+      method: "session/update",
+      params: {
+        sessionId: "wool-care",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "c1",
+          title: "Ran command",
+          rawInput: { command: "hostjob make test | tail -15" },
+        },
+      },
+    });
+    channel.deliver({
+      method: "session/update",
+      params: {
+        sessionId: "wool-care",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "c1",
+          status: "in_progress",
+          _meta: {
+            "cognition.ai/background": true,
+            "cognition.ai/backgroundShellId": "5c76b5",
+            "cognition.ai/backgroundCommand": "hostjob make test",
+          },
+        },
+      },
+    });
+
+    const started = onSignal.calls
+      .flat()
+      .find((signal) => signal.type === "background_started");
+    assert.deepEqual(started, {
+      type: "background_started",
+      shellId: "5c76b5",
+      toolCallId: "c1",
+      command: "hostjob make test",
+      rawCommand: "hostjob make test | tail -15",
+      auto: true,
+      outputPath: null,
+    });
+  });
 });

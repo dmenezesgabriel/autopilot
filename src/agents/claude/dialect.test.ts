@@ -296,7 +296,10 @@ describe("Claude notifications", () => {
         isEqual(signal, {
           type: "background_started",
           shellId: "b1",
+          toolCallId: null,
           command: "pnpm test",
+          rawCommand: null,
+          auto: false,
           outputPath: "/x/tasks/b1.output",
         }),
       ),

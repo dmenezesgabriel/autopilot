@@ -28,7 +28,10 @@ describe("BackgroundTaskTracker", () => {
       {
         type: "background_started",
         shellId: "bf6i5c6ud",
+        toolCallId: null,
         command: "pnpm test",
+        rawCommand: null,
+        auto: false,
         outputPath: "/scratch/tmp/tasks/bf6i5c6ud.output",
       },
     ]);

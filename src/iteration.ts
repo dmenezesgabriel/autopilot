@@ -43,6 +43,13 @@ export interface IterationDeps {
   classifyError(error: AgentError, now: Date): RateLimitVerdict | null;
   /** Tells, without a request, when the account is usable again; null waits for the agent's own reset time. */
   limitProbe: LimitProbe | null;
+  /**
+   * Proves the exit of auto-backgrounded shells from the kernel process table,
+   * for an agent whose exit notification can be lost; null trusts the agent's
+   * own report. Runs while the loop waits for background work, never while the
+   * turn itself runs.
+   */
+  probeShellExits: (() => Promise<void>) | null;
   /** The reason a workflow gives for ending the iteration instead of waiting out a limit, or null to wait. */
   yieldOnLimit(wakeAt: string): string | null;
 }
@@ -54,6 +61,8 @@ export type IterationTiming = {
   cancelAfterSilenceMs: number;
   /** How long a background command may outlive the turn that started it. */
   backgroundCeilingMs: number;
+  /** How often the process table is asked whether a reported-running shell still has a process. */
+  backgroundLivenessProbeMs: number;
   limitPollMs: number;
   /** How often a limit wait asks the probe whether the account is usable again. */
   limitProbeMs: number;
@@ -239,18 +248,16 @@ async function sleepUntilUsable(
 
 /** The turn ended while work it started still runs: wait for that work, then tell the agent how it ended. */
 async function awaitWork(deps: IterationDeps): Promise<Next> {
-  const { ledger, clock, timing } = deps;
+  const { ledger } = deps;
   await deps.emit({
     type: "awaiting_work",
     running: ledger.runningCommands(),
     // True when nothing runs and the wait is only to report an exit the agent has not heard.
     exitUnreported: ledger.hasUnreportedExit(),
   });
-  const settled = await Promise.race([
-    ledger.whenIdle().then(() => true),
-    clock.sleep(timing.backgroundCeilingMs).then(() => false),
-  ]);
-  if (!settled) {
+  await deps.probeShellExits?.();
+  const outcome = await waitForShells(deps);
+  if (outcome === "ceiling") {
     await deps.emit({
       type: "possibly_hung",
       running: ledger.runningCommands(),
@@ -267,14 +274,44 @@ async function awaitWork(deps: IterationDeps): Promise<Next> {
   const report = finished
     .map(
       (shell) =>
-        `The background command \`${shell.command}\` ${describeShellEnd(shell.exitCode)}.`,
+        `The background command \`${shell.command}\` ${describeShellEnd(shell.exitCode, shell.via)}.`,
     )
     .join("\n");
   return textPrompt(`${report}\nContinue from there.`);
 }
 
+/**
+ * Idle as soon as the ledger empties, the ceiling as its upper bound. Between
+ * the two the probe is asked on every tick whether a shell the agent calls
+ * running still has a process — an exit the agent never reported is the one
+ * wait that would otherwise run the whole ceiling.
+ */
+async function waitForShells(
+  deps: IterationDeps,
+): Promise<"idle" | "ceiling"> {
+  const { ledger, clock, timing } = deps;
+  const deadline = clock.now() + timing.backgroundCeilingMs;
+  for (;;) {
+    if (!ledger.isWorking()) return "idle";
+    const remaining = deadline - clock.now();
+    if (remaining <= 0) return "ceiling";
+    await Promise.race([
+      ledger.whenIdle(),
+      clock.sleep(Math.min(timing.backgroundLivenessProbeMs, remaining)),
+    ]);
+    if (!ledger.isWorking()) return "idle";
+    await deps.probeShellExits?.();
+  }
+}
+
 /** A null code is a task that was killed: no exit code exists, so none is claimed. */
-function describeShellEnd(exitCode: number | null): string {
+function describeShellEnd(
+  exitCode: number | null,
+  via: "liveness" | null,
+): string {
+  if (via === "liveness") {
+    return "finished — its exit was never reported; read the shell's output for the result";
+  }
   return exitCode === null
     ? "was killed before it reported an exit code"
     : `exited with code ${exitCode}`;

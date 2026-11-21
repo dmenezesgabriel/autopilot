@@ -27,6 +27,9 @@ describe("ActivityLedger", () => {
       type: "background_started",
       shellId: "19d403",
       command: "sleep 45",
+      toolCallId: null,
+      rawCommand: null,
+      auto: false,
       outputPath: "/o/task.output",
     });
 
@@ -40,6 +43,9 @@ describe("ActivityLedger", () => {
       type: "background_started",
       shellId: "a",
       command: "pnpm test",
+      toolCallId: null,
+      rawCommand: null,
+      auto: false,
       outputPath: "/o/task.output",
     });
 
@@ -47,7 +53,7 @@ describe("ActivityLedger", () => {
 
     assert.equal(ledger.isWorking(), false);
     assert.deepEqual(ledger.drainFinishedShells(), [
-      { command: "pnpm test", exitCode: 1 },
+      { command: "pnpm test", exitCode: 1, via: null },
     ]);
     assert.deepEqual(ledger.drainFinishedShells(), []);
   });
@@ -58,6 +64,9 @@ describe("ActivityLedger", () => {
       type: "background_started",
       shellId: "a",
       command: "pnpm test",
+      toolCallId: null,
+      rawCommand: null,
+      auto: false,
       outputPath: "/o/task.output",
     });
     assert.equal(ledger.hasUnreportedExit(), false);
@@ -87,6 +96,9 @@ describe("ActivityLedger", () => {
       type: "background_started",
       shellId: "a",
       command: "pnpm test",
+      toolCallId: null,
+      rawCommand: null,
+      auto: false,
       outputPath: "/o/task.output",
     });
     let released = false;
@@ -171,6 +183,9 @@ describe("ActivityLedger.apply news", () => {
       type: "background_started",
       shellId: "a",
       command: "run the suite",
+      toolCallId: null,
+      rawCommand: null,
+      auto: false,
       outputPath: "/o/task.output",
     } as const;
 
@@ -183,5 +198,61 @@ describe("ActivityLedger.apply news", () => {
         shellId: "foreground",
         exitCode: 0,
       }), false);
+  });
+});
+
+describe("ActivityLedger liveness probe", () => {
+  const started = (shellId: string, fields: Record<string, unknown>) => ({
+    type: "background_started" as const,
+    shellId,
+    command: "sleep 45",
+    toolCallId: "t1",
+    rawCommand: null,
+    auto: true,
+    outputPath: null,
+    ...fields,
+  });
+
+  it("rules an auto-backgrounded shell dead when no candidate is in live argv", () => {
+    const ledger = new ActivityLedger();
+    ledger.apply(started("a", { command: "sleep 45", rawCommand: "sleep 45 | tail -5" }));
+
+    assert.deepEqual(ledger.deadShellIds(new Set(["bash", "-c"])), ["a"]);
+    assert.equal(
+      ledger.deadShellIds(new Set(["sleep 45 | tail -5"])).length,
+      0,
+    );
+    assert.equal(ledger.deadShellIds(new Set(["sleep 45"])).length, 0);
+  });
+
+  it("never rules on a shell the agent itself sent to the background", () => {
+    const ledger = new ActivityLedger();
+    ledger.apply(started("a", { auto: false }));
+
+    assert.deepEqual(ledger.deadShellIds(new Set()), []);
+  });
+
+  it("never rules on a shell with no candidate command strings", () => {
+    const ledger = new ActivityLedger();
+    ledger.apply(started("a", { command: "", rawCommand: null }));
+
+    assert.deepEqual(ledger.deadShellIds(new Set()), []);
+  });
+
+  it("records a liveness-proven exit with no code and marks the shell finished", () => {
+    const ledger = new ActivityLedger();
+    ledger.apply(started("a", {}));
+
+    ledger.apply({
+      type: "background_exited",
+      shellId: "a",
+      exitCode: null,
+      via: "liveness",
+    });
+
+    assert.equal(ledger.isWorking(), false);
+    assert.deepEqual(ledger.drainFinishedShells(), [
+      { command: "sleep 45", exitCode: null, via: "liveness" },
+    ]);
   });
 });

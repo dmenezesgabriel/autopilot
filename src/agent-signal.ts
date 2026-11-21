@@ -15,11 +15,37 @@ export type AgentSignal =
   | {
       type: "background_started";
       shellId: string;
+      /** The tool call the shell was backgrounded from; null when the agent does not name one. */
+      toolCallId: string | null;
       command: string;
+      /**
+       * The command as the harness spawned it, when it differs from the
+       * reported `command`: devin's exec runs `bash -c <rawInput.command>` and
+       * its `backgroundCommand` meta can be a rewritten form, so a process's
+       * argv is matched against both.
+       */
+      rawCommand: string | null;
+      /**
+       * True when the harness itself moved a foreground call to the background
+       * (devin's ~10s exec timeout), rather than the model asking for it. The
+       * lost-terminal_exit race lives in that transition, so only these shells
+       * are checked against the kernel process table.
+       */
+      auto: boolean;
       /** The file the command's output goes to; null when the agent reports the command's exit itself. */
       outputPath: string | null;
     }
-  | { type: "background_exited"; shellId: string; exitCode: number | null }
+  | {
+      type: "background_exited";
+      shellId: string;
+      exitCode: number | null;
+      /**
+       * "liveness" when the loop proved the process gone from the kernel's
+       * table after the agent never reported the exit; unset when the agent
+       * reported it normally.
+       */
+      via?: "liveness";
+    }
   | { type: "agent_message"; text: string }
   | { type: "mode_changed"; mode: string }
   | { type: "plan_proposed"; plan: string }

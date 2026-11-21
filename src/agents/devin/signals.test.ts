@@ -83,8 +83,54 @@ describe("signalsFrom", () => {
       {
         type: "background_started",
         shellId: "19d403",
+        toolCallId: "c1",
         command: "sleep 45; echo finished",
+        rawCommand: null,
+        auto: true,
         outputPath: null,
+      },
+    ]);
+  });
+
+  it("marks a backgrounding the agent itself asked for as not auto", () => {
+    const signals = signalsFrom(
+      "session/update",
+      update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c1",
+        status: "in_progress",
+        _meta: {
+          "cognition.ai/background": true,
+          "cognition.ai/backgroundRequested": true,
+          "cognition.ai/backgroundShellId": "19d403",
+          "cognition.ai/backgroundCommand": "sleep 45",
+        },
+      }),
+    );
+
+    const started = signals.find(
+      (signal) => signal.type === "background_started",
+    );
+    assert.equal(started?.type === "background_started" && started.auto, false);
+  });
+
+  it("reads the exec command of a tool call as a tool_command signal", () => {
+    const signals = signalsFrom(
+      "session/update",
+      update({
+        sessionUpdate: "tool_call",
+        toolCallId: "c1",
+        title: "Ran command",
+        rawInput: { command: "sleep 45 | tail -5" },
+      }),
+    );
+
+    assert.deepEqual(signals, [
+      { type: "tool_started", toolCallId: "c1", title: "Ran command" },
+      {
+        type: "tool_command",
+        toolCallId: "c1",
+        command: "sleep 45 | tail -5",
       },
     ]);
   });

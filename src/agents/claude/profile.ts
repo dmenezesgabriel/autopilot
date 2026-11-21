@@ -26,8 +26,10 @@ export const CLAUDE_PROFILE: AgentProfile = {
     limitProbeMs: MINUTE,
     limitMarginMs: MINUTE,
     watchEveryMs: MINUTE,
+    backgroundLivenessProbeMs: MINUTE,
   },
   usesClaudeAccounts: true,
+  probesShellLiveness: false,
   createDialect: () => new ClaudeDialect(),
   classifyError: (error) => classifyClaudeError(error),
 };

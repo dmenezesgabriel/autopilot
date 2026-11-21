@@ -1,7 +1,21 @@
 import { classifyRateLimit, type RateLimitVerdict } from "./rate-limit.ts";
 import type { AgentSignal } from "./agent-signal.ts";
 
-export type FinishedShell = { command: string; exitCode: number | null };
+export type FinishedShell = {
+  command: string;
+  exitCode: number | null;
+  /** "liveness" when the kernel's process table proved the exit the agent never reported; null when the agent reported it. */
+  via: "liveness" | null;
+};
+
+type RunningShell = {
+  /** The display command the agent reported. */
+  command: string;
+  /** Every string a spawned process's argv may carry for this shell: the reported command and the command as spawned. */
+  candidates: ReadonlySet<string>;
+  /** Whether the harness itself backgrounded the call — the only shells the process-liveness probe may rule on. */
+  auto: boolean;
+};
 type RateLimitSignal = Extract<AgentSignal, { type: "rate_limit" }>;
 
 /**
@@ -13,7 +27,7 @@ type RateLimitSignal = Extract<AgentSignal, { type: "rate_limit" }>;
  * reports again, so counting open tool calls would wait for work that is gone.
  *
  * @example
- * ledger.apply({ type: "background_started", shellId: "b1", command: "./gradlew testDebugUnitTest", outputPath: "/x/b1.output" });
+ * ledger.apply({ type: "background_started", shellId: "b1", toolCallId: "t1", command: "./gradlew testDebugUnitTest", rawCommand: null, auto: true, outputPath: "/x/b1.output" });
  * ledger.isWorking(); // true until the matching background_exited arrives
  */
 export class ActivityLedger {
@@ -24,7 +38,7 @@ export class ActivityLedger {
   /** When the agent last sent any frame at all, in clock milliseconds. */
   lastFrameAtMs = 0;
   private rateLimit: RateLimitSignal | null = null;
-  private readonly runningShells = new Map<string, string>();
+  private readonly runningShells = new Map<string, RunningShell>();
   private finishedShells: FinishedShell[] = [];
   private messageText = "";
   private idleWaiters: Array<() => void> = [];
@@ -55,10 +69,18 @@ export class ActivityLedger {
   private fold(signal: AgentSignal): void {
     switch (signal.type) {
       case "background_started":
-        this.runningShells.set(signal.shellId, signal.command);
+        this.runningShells.set(signal.shellId, {
+          command: signal.command,
+          candidates: new Set(
+            [signal.command, signal.rawCommand].filter(
+              (word): word is string => typeof word === "string" && word !== "",
+            ),
+          ),
+          auto: signal.auto,
+        });
         break;
       case "background_exited":
-        this.finishShell(signal.shellId, signal.exitCode);
+        this.finishShell(signal.shellId, signal.exitCode, signal.via ?? null);
         break;
       case "agent_message":
         this.messageText += signal.text;
@@ -88,7 +110,24 @@ export class ActivityLedger {
   }
 
   runningCommands(): string[] {
-    return [...this.runningShells.values()];
+    return [...this.runningShells.values()].map((shell) => shell.command);
+  }
+
+  /**
+   * Auto-backgrounded shells none of whose commands appears in the live argv
+   * set. Only `auto` shells are ruled on: they started as a child of the agent
+   * process before the harness backgrounded them, so absence from its
+   * descendant tree can only mean exit. A shell with no candidate strings is
+   * never ruled dead — nothing about it is proven.
+   */
+  deadShellIds(liveArgv: ReadonlySet<string>): string[] {
+    const dead: string[] = [];
+    for (const [shellId, shell] of this.runningShells) {
+      if (!shell.auto || shell.candidates.size === 0) continue;
+      if ([...shell.candidates].some((word) => liveArgv.has(word))) continue;
+      dead.push(shellId);
+    }
+    return dead;
   }
 
   /**
@@ -123,11 +162,15 @@ export class ActivityLedger {
     this.rateLimit = null;
   }
 
-  private finishShell(shellId: string, exitCode: number | null): void {
-    const command = this.runningShells.get(shellId);
-    if (command === undefined) return;
+  private finishShell(
+    shellId: string,
+    exitCode: number | null,
+    via: "liveness" | null,
+  ): void {
+    const shell = this.runningShells.get(shellId);
+    if (shell === undefined) return;
     this.runningShells.delete(shellId);
-    this.finishedShells.push({ command, exitCode });
+    this.finishedShells.push({ command: shell.command, exitCode, via });
   }
 
   private releaseIdleWaiters(): void {

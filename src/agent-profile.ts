@@ -30,6 +30,14 @@ export interface AgentProfile {
    * is usable says nothing about another agent's limit, so only this agent's waits may end by it.
    */
   readonly usesClaudeAccounts: boolean;
+  /**
+   * Whether shells the agent itself moved to the background are verified
+   * against the kernel process table while the loop waits for them: devin's
+   * terminal_exit has been lost in the foreground→background transition, so
+   * the loop proves an exit itself. Claude's exits come from its output file
+   * instead.
+   */
+  readonly probesShellLiveness: boolean;
   /** One dialect per session: it may join facts that arrive in several frames. */
   createDialect(): AgentDialect;
   /** A prompt error that is a usage limit, or null when it is some other failure. */

@@ -63,7 +63,12 @@ export class BackgroundTaskTracker {
       {
         type: "background_started",
         shellId: facts.taskId,
+        toolCallId: null,
         command: facts.command,
+        rawCommand: null,
+        // Claude's task exit is proven by its output file, not the process
+        // table, so the liveness probe never rules on it.
+        auto: false,
         outputPath: facts.outputPath,
       },
     ];

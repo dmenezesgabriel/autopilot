@@ -4,7 +4,12 @@ import { PRIVATE_FILE_MODE } from "./private-dir.ts";
 import { createInterface } from "node:readline";
 import type { LineChannel } from "./json-rpc.ts";
 
-export type SpawnedAgent = { channel: LineChannel; stop(): Promise<void> };
+export type SpawnedAgent = {
+  channel: LineChannel;
+  /** The agent process's pid; undefined when spawn failed before a process existed. */
+  pid: number | undefined;
+  stop(): Promise<void>;
+};
 
 const KILL_AFTER_MS = 10_000;
 
@@ -55,7 +60,7 @@ export function spawnAcpAgent(
       void closed.then(listener);
     },
   };
-  return { channel, stop: () => stopChild(child, closed) };
+  return { channel, pid: child.pid, stop: () => stopChild(child, closed) };
 }
 
 async function stopChild(

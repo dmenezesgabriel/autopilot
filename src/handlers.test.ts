@@ -196,6 +196,9 @@ describe("buildHandlers journal", () => {
     type: "background_started",
     shellId: "a",
     command: "run the suite",
+    toolCallId: null,
+    rawCommand: null,
+    auto: false,
     outputPath: "/o/a.output",
   } as const;
 
@@ -210,7 +213,7 @@ describe("buildHandlers journal", () => {
     assert.deepEqual(events, [
       { type: "mode_changed", mode: "bypassPermissions" },
       { type: "background_started", shellId: "a", command: "run the suite" },
-      { type: "background_exited", shellId: "a", exitCode: 1 },
+      { type: "background_exited", shellId: "a", exitCode: 1, via: null },
     ]);
   });
 

@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { ActivityLedger } from "./activity-ledger.ts";
-import { AcpAgent, ModelSelectionError, type PromptBlock } from "./acp-agent.ts";
+import {
+  AcpAgent,
+  ModelSelectionError,
+  type AgentHandlers,
+  type PromptBlock,
+} from "./acp-agent.ts";
 import type { AgentChoice } from "./agent-choice.ts";
 import type { AgentProfile } from "./agent-profile.ts";
 import { profileFor } from "./agents/index.ts";
@@ -12,6 +17,7 @@ import { runIteration, type IterationOutcome } from "./iteration.ts";
 import { RpcError } from "./json-rpc.ts";
 import { limitProbeFor } from "./limit-probe.ts";
 import { planFollowUpOf, promptFileOf, type LoopContext } from "./loop-context.ts";
+import { liveArgvOf, nodeProcfs } from "./proc-tree.ts";
 import { spawnAcpAgent, type SpawnedAgent } from "./spawn-agent.ts";
 
 const BACKGROUND_POLL_MS = 10_000;
@@ -82,6 +88,7 @@ type Session = {
   ledger: ActivityLedger;
   watcher: BackgroundExitWatcher;
   agent: AcpAgent;
+  probeShellExits: (() => Promise<void>) | null;
 };
 
 /**
@@ -127,13 +134,46 @@ function openSession(context: LoopContext, choice: SessionChoice): Session {
     handlers,
     choice.profile.createDialect(),
   );
-  return { spawned, ledger, watcher, agent };
+  return {
+    spawned,
+    ledger,
+    watcher,
+    agent,
+    probeShellExits: choice.profile.probesShellLiveness
+      ? () => probeShellExits(spawned, ledger, handlers)
+      : null,
+  };
+}
+
+/**
+ * An auto-backgrounded shell started life as a `bash -c` child of the agent
+ * process, so when the agent reports no exit but the shell's command appears
+ * in no descendant argv, the kernel has already recorded the exit the wire
+ * lost. `null` from the probe means the tree could not be read and nothing is
+ * inferred.
+ */
+async function probeShellExits(
+  spawned: SpawnedAgent,
+  ledger: ActivityLedger,
+  handlers: AgentHandlers,
+): Promise<void> {
+  if (spawned.pid === undefined) return;
+  const argv = await liveArgvOf(spawned.pid, nodeProcfs);
+  if (argv === null) return;
+  for (const shellId of ledger.deadShellIds(argv)) {
+    handlers.onSignal({
+      type: "background_exited",
+      shellId,
+      exitCode: null,
+      via: "liveness",
+    });
+  }
 }
 
 async function driveSession(
   context: LoopContext,
   choice: SessionChoice,
-  { agent, ledger }: Session,
+  { agent, ledger, probeShellExits }: Session,
 ): Promise<IterationOutcome> {
   await agent.initialize();
   const sessionId = await agent.newSession(context.repoRoot);
@@ -170,6 +210,7 @@ async function driveSession(
     limitProbe: choice.profile.usesClaudeAccounts
       ? limitProbeFor(context.workflow.limitProbe)
       : null,
+    probeShellExits,
     yieldOnLimit: (wakeAt) =>
       context.engine.yieldReason({ type: "rate_limited", wakeAt }),
   });

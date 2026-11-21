@@ -121,6 +121,9 @@ describe("runIteration", () => {
           type: "background_started",
           shellId: "19d403",
           command: "pnpm test",
+          toolCallId: null,
+          rawCommand: null,
+          auto: false,
           outputPath: null,
         });
         return "end_turn";
@@ -156,6 +159,9 @@ describe("runIteration", () => {
           type: "background_started",
           shellId: "b1",
           command: "pnpm lint",
+          toolCallId: null,
+          rawCommand: null,
+          auto: false,
           outputPath: null,
         });
         parts.ledger.apply({
@@ -187,6 +193,9 @@ describe("runIteration", () => {
           type: "background_started",
           shellId: "k1",
           command: "pnpm test",
+          toolCallId: null,
+          rawCommand: null,
+          auto: false,
           outputPath: "/o/k1.output",
         });
         return "end_turn";
@@ -220,6 +229,9 @@ describe("runIteration", () => {
           type: "background_started",
           shellId: "x",
           command: "pnpm test",
+          toolCallId: null,
+          rawCommand: null,
+          auto: false,
           outputPath: null,
         });
         return "end_turn";
@@ -237,6 +249,78 @@ describe("runIteration", () => {
       type: "possibly_hung",
       running: ["pnpm test"],
     })));
+  });
+
+  it("ends the wait as soon as the liveness probe proves a shell exited, without claiming a code", async () => {
+    // The devin lost-`terminal_exit` race: the process is gone, the wire stays silent.
+    const { deps, agent, ledger } = build((parts) => [
+      () => {
+        parts.ledger.apply({ type: "mode_changed", mode: "bypass" });
+        parts.ledger.apply({
+          type: "background_started",
+          shellId: "5c76b5",
+          command: "pnpm test",
+          toolCallId: "call_1",
+          rawCommand: "pnpm test | tail -15",
+          auto: true,
+          outputPath: null,
+        });
+        return "end_turn";
+      },
+      commitsInBypass(parts),
+    ]);
+    deps.probeShellExits = async () => {
+      for (const shellId of ledger.deadShellIds(new Set(["bash", "-c"]))) {
+        ledger.apply({
+          type: "background_exited",
+          shellId,
+          exitCode: null,
+          via: "liveness",
+        });
+      }
+    };
+
+    const outcome = await runIteration(deps);
+
+    const report = agent.promptTexts()[1];
+    assert.ok(report?.includes("`pnpm test` finished"));
+    assert.ok(report?.includes("exit was never reported"));
+    assert.equal(outcome.kind, "done");
+  });
+
+  it("keeps waiting, to the ceiling, when the probe still finds the shell's process", async () => {
+    const { deps, clock, ledger } = build((parts) => [
+      () => {
+        parts.ledger.apply({ type: "mode_changed", mode: "bypass" });
+        parts.ledger.apply({
+          type: "background_started",
+          shellId: "a",
+          command: "pnpm test",
+          toolCallId: "call_1",
+          rawCommand: null,
+          auto: true,
+          outputPath: null,
+        });
+        return "end_turn";
+      },
+    ]);
+    clock.holdSleepsLongerThanMs = TIMING.backgroundCeilingMs + 1;
+    let probes = 0;
+    deps.probeShellExits = async () => {
+      probes += 1;
+      for (const shellId of ledger.deadShellIds(new Set(["pnpm test"]))) {
+        ledger.apply({ type: "background_exited", shellId, exitCode: 0 });
+      }
+    };
+
+    const outcome = await runIteration(deps);
+
+    assert.deepEqual(outcome, {
+      kind: "halted",
+      reason: "background work outlived its ceiling",
+    });
+    assert.ok(probes > 0);
+    assert.equal(ledger.isWorking(), true);
   });
 
   it("waits out a rejected limit the adapter reported and sends continue, not a nudge", async () => {

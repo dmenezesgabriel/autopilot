@@ -2,6 +2,7 @@ import type { AgentSignal } from "../../agent-signal.ts";
 
 type UpdateMeta = {
   "cognition.ai/background"?: boolean;
+  "cognition.ai/backgroundRequested"?: boolean;
   "cognition.ai/backgroundShellId"?: string;
   "cognition.ai/backgroundCommand"?: string;
   terminal_exit?: { terminal_id: string; exit_code: number | null };
@@ -13,7 +14,7 @@ type SessionUpdate = {
   title?: string;
   kind?: string;
   status?: string;
-  rawInput?: { plan?: string };
+  rawInput?: { plan?: string; command?: string };
   content?: { type?: string; text?: string };
   currentModeId?: string;
   _meta?: UpdateMeta;
@@ -88,6 +89,13 @@ function fromToolCall(update: SessionUpdate): AgentSignal[] {
   const signals: AgentSignal[] = [
     { type: "tool_started", toolCallId, title: update.title ?? "" },
   ];
+  if (update.rawInput?.command) {
+    signals.push({
+      type: "tool_command",
+      toolCallId,
+      command: update.rawInput.command,
+    });
+  }
   if (update.kind === "switch_mode" && update.rawInput?.plan !== undefined) {
     signals.push({ type: "plan_proposed", plan: update.rawInput.plan });
   }
@@ -102,7 +110,11 @@ function fromToolCallUpdate(update: SessionUpdate): AgentSignal[] {
     signals.push({
       type: "background_started",
       shellId,
+      toolCallId: update.toolCallId ?? null,
       command: meta["cognition.ai/backgroundCommand"] ?? "",
+      // Joined onto the signal by the dialect from the tool_call's rawInput.
+      rawCommand: null,
+      auto: meta["cognition.ai/backgroundRequested"] !== true,
       outputPath: null,
     });
   }

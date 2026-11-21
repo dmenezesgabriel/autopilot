@@ -68,7 +68,7 @@ export const EVENTS = {
   exit_plan_bypass_missing: { kind: "alert", wake: true, fields: ["offered"], means: "Leaving plan mode did not offer bypass" },
   exit_plan_reject_missing: { kind: "alert", wake: true, fields: ["offered"], means: "Declining the plan exit was not offered" },
   background_started: { kind: "telemetry", fields: ["shellId", "command"], means: "The agent started a background command" },
-  background_exited: { kind: "telemetry", fields: ["shellId", "exitCode"], means: "A background command ended (a null code is a killed task)" },
+  background_exited: { kind: "telemetry", fields: ["shellId", "exitCode", "via"], means: "A background command ended (a null code is a killed task; via liveness means the kernel proved the exit the agent never reported)" },
   background_watch_error: { kind: "alert", wake: true, fields: ["shellId", "error"], means: "The loop could not read a background command's output file" },
   rate_limit_rejected: { kind: "telemetry", fields: ["limitType", "resetsAt"], means: "The agent reported a rejected usage limit" },
   rate_limited: { kind: "alert", wake: false, fields: ["wakeAt"], means: "A usage limit hit and the loop waits" },

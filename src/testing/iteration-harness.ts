@@ -11,6 +11,7 @@ export const TIMING: IterationTiming = {
   possiblyHungAfterMs: 45 * 60_000,
   cancelAfterSilenceMs: 3 * 60 * 60_000,
   backgroundCeilingMs: 3 * 60 * 60_000,
+  backgroundLivenessProbeMs: 60_000,
   limitPollMs: 30 * 60_000,
   limitProbeMs: 60_000,
   limitMarginMs: 60_000,
@@ -42,6 +43,7 @@ export function build(turnsFor: (parts: Parts) => Array<() => StopReason>) {
     bypassMode: CLAUDE_PROFILE.bypassMode,
     classifyError: CLAUDE_PROFILE.classifyError,
     limitProbe: null,
+    probeShellExits: null,
     yieldOnLimit: () => null,
   };
   return { deps, agent, ...parts, askReply };

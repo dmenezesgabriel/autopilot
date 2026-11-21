@@ -27,8 +27,11 @@ export const DEVIN_PROFILE: AgentProfile = {
     limitProbeMs: MINUTE,
     limitMarginMs: MINUTE,
     watchEveryMs: MINUTE,
+    // Devin's own shell poll is 10-15s; a probe faster than that cannot see an exit sooner.
+    backgroundLivenessProbeMs: 15_000,
   },
   usesClaudeAccounts: false,
+  probesShellLiveness: true,
   createDialect: () => new DevinDialect(),
   classifyError: classifyDevinError,
 };

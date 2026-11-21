@@ -118,7 +118,12 @@ function stateEvent(signal: AgentSignal): LoopEvent | null {
   }
   if (signal.type === "background_exited") {
     const { shellId, exitCode } = signal;
-    return { type: "background_exited", shellId, exitCode };
+    return {
+      type: "background_exited",
+      shellId,
+      exitCode,
+      via: signal.via ?? null,
+    };
   }
   return null;
 }
