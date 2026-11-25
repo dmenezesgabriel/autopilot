@@ -58,6 +58,7 @@ export const EVENTS = {
   mode_changed: { kind: "telemetry", fields: ["mode"], means: "The agent changed mode" },
   plan_ready: { kind: "telemetry", fields: ["plan"], means: "The agent proposed a plan" },
   plan_approved: { kind: "telemetry", fields: ["via"], means: "The loop approved the plan under the follow-up command" },
+  turn_started: { kind: "telemetry", fields: [], means: "The agent was sent a prompt and its turn began; with `turn_ended` it bounds the time the agent spends in a turn, and what lies between turns is waiting" },
   turn_ended: { kind: "telemetry", fields: ["end", "decision"], means: "A prompt turn ended and the loop chose its next step" },
   awaiting_work: { kind: "telemetry", fields: ["running", "exitUnreported"], means: "The turn ended while a background command still runs" },
   needs_answer: { act: "`autopilot answer <id> --why \"<evidence>\" \"<label>\" ...`, one label per question; a label that is not an offered option is sent as the question's own \"Other\" text. The reason in --why is journaled. Escalate to the user what only they can decide: money, credentials, destructive actions.", kind: "decision", fields: ["id", "questions"], means: "The agent asked a multiple-choice question and waits" },

@@ -326,6 +326,9 @@ async function runTurn(
   blocks: PromptBlock[],
 ): Promise<TurnEnd> {
   deps.ledger.startTurn();
+  // Written before the prompt, so a turn that never ends is still on the record, and the time between
+  // `turn_ended` and the next `turn_started` is exactly the time the agent was not being asked anything.
+  await deps.emit({ type: "turn_started" });
   // The silence clock starts with the turn, not with the last frame of an earlier one.
   deps.ledger.lastFrameAtMs = deps.clock.now();
   const watchSilence = silenceWatcher(deps);

@@ -7,6 +7,7 @@ import {
   type LimitWait,
   type Restart,
 } from "./report-iterations.ts";
+import { timeLines, timeSplitOf, type TimeSplit } from "./report-time.ts";
 import type { TranscriptStats } from "./transcript-stats.ts";
 
 export type ReportInput = {
@@ -23,7 +24,7 @@ export type ReportRow = IterationRecord & {
   compactions: number;
 };
 
-export type Report = { rows: ReportRow[]; restarts: Restart[]; limitWaits: LimitWait[] };
+export type Report = { rows: ReportRow[]; restarts: Restart[]; limitWaits: LimitWait[]; time: TimeSplit | null };
 
 /**
  * Joins the journal to git and to the transcripts by exact keys: an iteration's session id names its
@@ -32,7 +33,7 @@ export type Report = { rows: ReportRow[]; restarts: Restart[]; limitWaits: Limit
 export async function buildReport(input: ReportInput): Promise<Report> {
   const records = iterationsOf(input.events, input.headNow);
   const rows = await Promise.all(records.map((record) => joinRow(record, input)));
-  return { rows, restarts: restartsOf(input.events), limitWaits: limitWaitsOf(input.events) };
+  return { rows, restarts: restartsOf(input.events), limitWaits: limitWaitsOf(input.events), time: timeSplitOf(input.events) };
 }
 
 async function joinRow(record: IterationRecord, input: ReportInput): Promise<ReportRow> {
@@ -111,8 +112,8 @@ function limitLines(waits: LimitWait[]): string[] {
   ];
 }
 
-/** The report as text: one line per agent and outcome, the unplanned restarts, the limit waits. */
+/** The report as text: one line per agent and outcome, the unplanned restarts, the limit waits, where the time went. */
 export function formatReport(report: Report): string {
-  const lines = [HEADER, ...groupsOf(report.rows).map(groupLine), "", ...restartLines(report.restarts), "", ...limitLines(report.limitWaits)];
+  const lines = [HEADER, ...groupsOf(report.rows).map(groupLine), "", ...restartLines(report.restarts), "", ...limitLines(report.limitWaits), "", ...timeLines(report.time)];
   return lines.join("\n");
 }

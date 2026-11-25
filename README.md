@@ -39,7 +39,7 @@ Every command takes `--repo <dir>` (default: the current directory) and finds th
 | `status`, `pending`, `watch`, `wait` | what runs and waits; the open questions as JSON; JSON lines for the events an orchestrator must act on; the next such event, one call per wake-up |
 | `answer <id>`, `reply <id>` | answer a question or reply, with `--why` |
 | `use <harness>`, `use --reset`, `stop` | override the next session's harness, model or effort (or remove the override) and print what the next session will run on; finish the current iteration and exit (said plainly when no loop runs) |
-| `report [--json]` | iterations, commits, hours, cost, calls, compactions, restarts, limit waits |
+| `report [--json]` | iterations, commits, hours, cost, calls, compactions, restarts, limit waits, and where the time of finished iterations went (in a turn, idle for background commands, for an answer, for a limit; held by preflight) |
 | `service print\|install` | the systemd user unit that starts the loop at boot and restarts a crash (Linux with systemd; elsewhere `run` under your own supervisor, such as launchd) |
 
 `stop` ends the loop; the unit does not bring it back until the next boot. To keep it down across a reboot, `systemctl --user disable` the unit.
