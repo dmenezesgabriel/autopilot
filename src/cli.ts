@@ -1,7 +1,7 @@
 import { runCtl } from "./ctl.ts";
 import { isEntryPoint } from "./entry-point.ts";
 import { main as runLoop } from "./run.ts";
-import { events, init, pending, readVersion, simulateCommand, validate, waitCommand, watch } from "./workflow-commands.ts";
+import { events, guide, init, pending, readVersion, simulateCommand, validate, waitCommand, watch } from "./workflow-commands.ts";
 
 const USAGE = `autopilot: drives an ACP coding agent through a repository's backlog, one session per commit.
 
@@ -10,6 +10,7 @@ usage: autopilot <command> [--repo <dir>] ...
   run [flags]        start the loop (flags: --harness --model --effort --agent-command --prompt --workflow
                      --run-dir --plan-follow-up)
   init               write a starter autopilot.yaml
+  guide              how to orchestrate this loop: the commands, the events and what to do
   validate           read autopilot.yaml and say what it does
   events [--json]    every event a workflow can name, with its fields
   simulate           replay the journal through the workflow, running nothing
@@ -40,6 +41,7 @@ export async function cli(argv: string[]): Promise<number> {
   if (command === "validate") return print(await validate(rest));
   if (command === "events") return print(events(rest));
   if (command === "init") return print(await init(rest));
+  if (command === "guide") return print(await guide(rest));
   if (command === "simulate") return print(await simulateCommand(rest));
   if (command === "pending") return print(await pending(rest));
   if (command === "--version" || command === "-v") return print(await readVersion());

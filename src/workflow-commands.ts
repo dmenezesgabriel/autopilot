@@ -1,9 +1,11 @@
 import { access, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { relative, resolve } from "node:path";
 import { runDirFor, runDirOf, splitRepo } from "./ctl.ts";
 import { describeNextSession } from "./next-session.ts";
 import { EVENTS, EVENT_NAMES } from "./event-registry.ts";
 import { requiredValue } from "./flags.ts";
+import { describeGuide } from "./guide.ts";
 import { isIgnoredByGit } from "./git-probe.ts";
 import type { LoopEvent } from "./mailbox.ts";
 import { formatSimulation, simulate } from "./simulate.ts";
@@ -69,7 +71,29 @@ export async function init(args: string[]): Promise<string> {
   const exists = await access(workflowPath).then(() => true, () => false);
   if (exists && !args.includes("--force")) throw new Error(`${workflowPath} already exists; --force replaces it`);
   await writeFile(workflowPath, STARTER_WORKFLOW);
-  return `wrote ${workflowPath}; edit it, then \`autopilot validate\``;
+  return `wrote ${workflowPath}; edit it, then \`autopilot validate\`. Orchestrating the loop? \`autopilot guide\` says how`;
+}
+
+/**
+ * `autopilot guide`: the orchestrator's brief for this repository, generated from the installed build, the
+ * workflow and the event registry. It is how a new orchestrator session learns the protocol without being
+ * told a file path, and why it has no reason to write a runbook into the worker's tree.
+ */
+export async function guide(args: string[]): Promise<string> {
+  const { repoRoot, workflowPath, workflowFlag } = locate(args);
+  const workflow = await loadWorkflow(workflowPath, false);
+  const runDir = await runDirFor(repoRoot, workflowFlag);
+  const next = await describeNextSession(runDirOf(repoRoot, workflow), workflow);
+  return describeGuide({
+    repoRoot,
+    version: await readVersion(),
+    runDir: runDir.path,
+    runDirIgnored: (await runDirWarning(repoRoot, workflow.runDir)) === null,
+    backlog: describeBacklog(workflow),
+    nextSession: next.map((line) => line.trimStart()),
+    wake: workflow.wake,
+    packagedDoc: fileURLToPath(new URL("../docs/ORCHESTRATOR.md", import.meta.url)),
+  });
 }
 
 /** `autopilot simulate`: replays the repository's journal through its workflow, running nothing. */

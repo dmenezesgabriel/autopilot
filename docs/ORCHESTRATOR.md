@@ -2,6 +2,8 @@
 
 The loop opens a fresh session of the chosen agent in plan mode, gives it the repository's prompt file, answers nothing itself, lets the session leave plan mode, waits for its commit and starts the next. A headed Claude Code session is the orchestrator: it reads the loop's events and answers what only judgement can. The answering policy, and any standing rule about demos, belong to each repository (its `AGENTS.md` and its config's `standingRules`); this file is only how to run the loop.
 
+**Orchestrating a loop right now? Run `autopilot guide --repo <repo>`.** It prints this runbook's working parts for that repository, generated from the installed build, its workflow and the event registry: the commands with the path filled in, the events that wake you with what each needs, the rules, and where to keep your notes (the run directory, never the repository tree). This file holds the rationale and the measurements behind it.
+
 ## Start
 
 `autopilot` is installed once ([README](../README.md)); a repository needs only its `autopilot.yaml`. `--repo` names the repository (default: the current directory).
@@ -55,30 +57,9 @@ Measured on three loops (see [rationale.md](rationale.md)), the orchestrator ses
 
 ## Events and what to do
 
-| Event | Meaning | Do |
-| --- | --- | --- |
-| `iteration_started`, `iteration_done` | One session began; one ended with a new commit and a clean tree | Report the commit in one line |
-| `needs_answer {id, questions}` | The agent asked a multiple-choice question and waits | `autopilot answer <id> --why "<evidence>" "<label>" ...`, one label per question; `--why` is journaled. A label that is not an offered option is sent as the question's own "Other" text (the command says so). The command refuses an id that nothing waits on, a reply to a question, a wrong number of labels, and any answer when no loop runs, and writes nothing then. Ids are unique in a run directory (`q5` is never asked twice). ESCALATE when it needs the user |
-| `needs_answer_overdue` | Ten minutes without an answer | ESCALATE. At 60 minutes the loop answers with the option marked Recommended, else the first, and logs `answer_defaulted` |
-| `needs_reply {id, why, lastMessage}` | The agent stopped in plan mode, or in bypass with no commit or a dirty tree | `autopilot reply <id> --why "<reason>" "<text>"`. At 10 minutes the loop sends a fixed nudge and logs `reply_defaulted` |
-| `awaiting_work` | The agent ended its turn while a background command it started still runs | Nothing: the loop watches for the exit, then tells the agent how it ended |
-| `possibly_hung` | 45 minutes without a frame, or a background command beyond its 3 hour ceiling | Read the newest `acp-*.jsonl` tail; `autopilot stop` if stuck. The loop cancels after 3 hours of silence |
-| `rate_limited {wakeAt}` | A usage limit hit; the loop waits | Nothing |
-| `limit_cleared {early}` | The probe saw the account usable again (`early` is true before `wakeAt`) and the loop went on | Nothing |
-| `rate_limit_rejected` | Claude Code reported a rejected limit with its type and reset time | Nothing. Without a probe a seven-day limit becomes `loop_halted`; with one it is waited out |
-| `preflight_wait {reason}` | A new session is held back: a busy host, or a leftover process or a wrapped job | Nothing for a busy host. For a leftover, look at it and tell the user; never kill what you did not start |
-| `permission_requested` | The permission mode still asked about a tool; the loop allowed it once | Read the tool. ESCALATE if destructive or outside the repo |
-| `background_watch_error {shellId, error}` | The loop could not read a background command's output file | Look at the file the error names. Never edit it by hand |
-| `exit_plan_bypass_missing`, `exit_plan_reject_missing {offered}` | Leaving plan mode did not offer bypass, or declining was not offered; the iteration halts | ESCALATE with the offered option ids |
-| `agent_signal` | A notification or session update nobody has read yet | Note its payload in your report |
-| `agent_choice_changed`, `agent_choice_invalid` | A new `choice.json` was read, or could not be | Say it; fix an invalid one with `autopilot use` |
-| `agent_stopped {cause}` | Devin ended its turn for a reason other than completing | Read `cause`; a limit or error is followed by the loop's own wait or retry |
-| `plan_approved {via}` | The loop declined the plan exit, left plan mode and handed the agent its plan under the follow-up command | Nothing |
-| `loop_signalled {signal}` | The loop received SIGTERM, SIGINT or SIGHUP and exited (a service stop or a shutdown) | Nothing; the next start journals `iteration_interrupted` |
-| `loop_halted {reason}` | Refusal, repeated stalls or crashes, session setup failure, or a weekly limit with no probe | ESCALATE with the reason; do not restart without looking |
-| `workflow_applied`, `workflow_error`, `workflow_invalid` | A workflow handler ran, one of its actions failed, or the workflow file could not be read at an iteration start (the previous one stays) | `workflow_error` and `workflow_invalid` name the handler or path: fix the workflow file; the loop reads it again at the next iteration |
-| `iteration_yielded {reason}` | A workflow handler ended the iteration on purpose (for example to fail over to the other agent); its work is in the tree | Nothing; the next session picks the work up |
-| `backlog_exhausted`, `stop` | No row carries the marker, or `autopilot stop` was run | Done: end the goal |
+The events that wake an orchestrator, each with what it needs, are printed by `autopilot guide`; they are written once, as the `act` of each event in `src/event-registry.ts`, so this file cannot disagree with the loop. `autopilot events` lists every event a workflow can name, with its fields and meaning. An event that is not in the workflow's `wake` list never needs you: the loop reads `iteration_started`, `iteration_done`, `rate_limited`, `preflight_wait`, `awaiting_work` and the like by itself, and `autopilot report` summarises them. A repository that wants a report of each commit puts it in its workflow as a command (`on: iteration_done`), which costs no orchestrator turn.
+
+Two behaviours worth knowing, from the loop's own code and measurements: an answer to an id that nothing waits on is refused and writes nothing, and ids are unique in a run directory (`q5` is never asked twice), so a late answer cannot land on the wrong question.
 
 ## Facts the loop relies on
 

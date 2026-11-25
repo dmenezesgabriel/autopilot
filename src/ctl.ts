@@ -37,10 +37,11 @@ async function livenessOf(runDir: RunDir): Promise<LoopLiveness> {
   return { pid, alive: pid !== null && isProcessAlive(pid) };
 }
 
-async function status(context: RunContext): Promise<string> {
+async function status(context: RunContext, repoRoot: string): Promise<string> {
   const { pid, alive } = await livenessOf(context.runDir);
   const summary = summarizeJournal(await context.runDir.readEvents());
-  return describeSummary(summary, pid, alive, await nextSessionLines(context));
+  const hint = `orchestrating this loop? \`autopilot guide --repo ${repoRoot}\` says how`;
+  return `${describeSummary(summary, pid, alive, await nextSessionLines(context))}\n${hint}`;
 }
 
 /** Writes the answer or reply the loop waits on, after checking the journal and the lock say one does. */
@@ -207,7 +208,7 @@ export async function runCtl(args: string[]): Promise<string> {
   const [command, id, ...rest] = argv;
   if (command === "service") return service(id ?? "", repoRoot, workflow === null ? rest : ["--workflow", resolve(repoRoot, workflow), ...rest]);
   if (command === "report") return report(runDir, repoRoot, argv.includes("--json"));
-  if (command === "status") return status(context);
+  if (command === "status") return status(context, repoRoot);
   if (command === "use") {
     if (argv[1] === "--reset") {
       const had = (await runDir.readChoice().catch(() => ({}))) !== null;

@@ -35,6 +35,7 @@ Every command takes `--repo <dir>` (default: the current directory) and finds th
 | --- | --- |
 | `run [flags]` | start the loop (`--harness --model --effort --agent-command --prompt --workflow --run-dir --plan-follow-up`; flags override the workflow, one field at a time) |
 | `init`, `validate`, `events`, `simulate` | write, check, and try a workflow; list the events it can name |
+| `guide` | the orchestrator's brief for this repository: commands with the path filled in, the events that wake it and what each needs, the rules, where to keep notes |
 | `status`, `pending`, `watch`, `wait` | what runs and waits; the open questions as JSON; JSON lines for the events an orchestrator must act on; the next such event, one call per wake-up |
 | `answer <id>`, `reply <id>` | answer a question or reply, with `--why` |
 | `use <harness>`, `use --reset`, `stop` | override the next session's harness, model or effort (or remove the override) and print what the next session will run on; finish the current iteration and exit (said plainly when no loop runs) |
@@ -74,7 +75,7 @@ on:
 | `src/workflow*.ts`, `src/conditions.ts`, `src/event-registry.ts`, `src/simulate.ts` | the workflow schema, its handlers and engine, and the list of events |
 | `src/agents/claude`, `src/agents/devin` | what differs between agents on the wire: profile, dialect, signals, limit text |
 | `src/preflight.ts`, `src/limit-probe.ts` | what holds a session back; the account probe |
-| `src/report*.ts`, `src/transcript-stats.ts`, `src/watch.ts`, `src/wait.ts` | `report`, `watch`, `wait` |
+| `src/report*.ts`, `src/transcript-stats.ts`, `src/watch.ts`, `src/wait.ts`, `src/guide.ts` | `report`, `watch`, `wait`, `guide` |
 | `src/service-unit.ts`, `src/signal-journal.ts` | the systemd unit and the signal line in the journal |
 | `testdata/autopilot-frames/` | recorded ACP frames of each agent, the fixtures its signal tests read |
 

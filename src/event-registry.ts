@@ -18,6 +18,11 @@ type EventSpecBase = {
   readonly fields: readonly string[];
   readonly means: string;
   /**
+   * What an orchestrator does when this event wakes it. Required, in a test, of every event that wakes it by
+   * default: `autopilot guide` prints it, so the runbook cannot drift from the events the loop emits.
+   */
+  readonly act?: string;
+  /**
    * What the event closes: an iteration (with its outcome) or the loop (with how it ended). Every reader of
    * the journal takes this from here, so `status`, `report` and the restart count cannot each keep a list
    * of their own and miss an event the others know.
@@ -38,15 +43,15 @@ export type EventSpec = EventSpecBase &
 
 export const EVENTS = {
   loop_started: { kind: "progress", fields: ["repoRoot", "pid", "agent", "model", "effort", "planFollowUp"], means: "A loop process began" },
-  loop_halted: { kind: "alert", wake: true, ends: { loop: "halted" }, fields: ["reason"], means: "The loop ended on its own: weekly limit with no probe, refusal, repeated stalls or crashes, session setup failure" },
+  loop_halted: { act: "Escalate to the user with `reason`; do not restart the loop without looking at why it stopped.", kind: "alert", wake: true, ends: { loop: "halted" }, fields: ["reason"], means: "The loop ended on its own: weekly limit with no probe, refusal, repeated stalls or crashes, session setup failure" },
   loop_signalled: { kind: "telemetry", ends: { loop: "signalled" }, fields: ["signal"], means: "SIGTERM, SIGINT or SIGHUP ended the loop (a service stop or a shutdown)" },
-  backlog_exhausted: { kind: "progress", wake: true, ends: { loop: "exhausted" }, fields: [], means: "No backlog row carries the marker" },
+  backlog_exhausted: { act: "Done: no row is left to work on. Tell the user and end your goal.", kind: "progress", wake: true, ends: { loop: "exhausted" }, fields: [], means: "No backlog row carries the marker" },
   stop: { kind: "progress", ends: { loop: "stopped" }, fields: [], means: "`autopilot stop` was run and the loop is leaving" },
   iteration_started: { kind: "progress", fields: ["row", "head"], means: "A fresh session begins on the next row" },
   iteration_done: { kind: "progress", ends: { iteration: "done" }, fields: ["head"], means: "A session ended with a new commit and a clean tree" },
-  iteration_stalled: { kind: "alert", wake: true, ends: { iteration: "stalled" }, fields: ["reason"], means: "The agent kept stopping without a commit" },
-  iteration_halted: { kind: "alert", wake: true, ends: { iteration: "halted" }, fields: ["reason"], means: "An iteration ended by a halt (limit, refusal, setup failure, background work past its ceiling)" },
-  iteration_crashed: { kind: "alert", wake: true, ends: { iteration: "crashed" }, fields: [], means: "The agent's channel closed" },
+  iteration_stalled: { act: "Read the agent's last message (`autopilot status`) and the tail of the newest acp-*.jsonl; repeated stalls halt the loop, so tell the user when the cause is not clear.", kind: "alert", wake: true, ends: { iteration: "stalled" }, fields: ["reason"], means: "The agent kept stopping without a commit" },
+  iteration_halted: { act: "Read the event's fields and the tail of the newest acp-*.jsonl; tell the user why before anything restarts.", kind: "alert", wake: true, ends: { iteration: "halted" }, fields: ["reason"], means: "An iteration ended by a halt (limit, refusal, setup failure, background work past its ceiling)" },
+  iteration_crashed: { act: "Read the tail of the newest acp-*.jsonl; the loop opens a fresh session itself, so tell the user if it repeats.", kind: "alert", wake: true, ends: { iteration: "crashed" }, fields: [], means: "The agent's channel closed" },
   iteration_yielded: { kind: "progress", ends: { iteration: "yielded" }, fields: ["reason"], means: "A workflow ended the iteration on purpose, leaving its work in the tree for the next session" },
   iteration_interrupted: { kind: "alert", wake: false, ends: { iteration: "interrupted" }, fields: ["n", "row", "sessionId", "pending", "running"], means: "A previous loop process died mid-iteration" },
   session_started: { kind: "telemetry", fields: ["sessionId", "agent", "model", "effort"], means: "An agent session opened" },
@@ -55,31 +60,31 @@ export const EVENTS = {
   plan_approved: { kind: "telemetry", fields: ["via"], means: "The loop approved the plan under the follow-up command" },
   turn_ended: { kind: "telemetry", fields: ["end", "decision"], means: "A prompt turn ended and the loop chose its next step" },
   awaiting_work: { kind: "telemetry", fields: ["running", "exitUnreported"], means: "The turn ended while a background command still runs" },
-  needs_answer: { kind: "decision", fields: ["id", "questions"], means: "The agent asked a multiple-choice question and waits" },
-  needs_answer_overdue: { kind: "alert", wake: true, fields: ["id", "waitedMs"], means: "A question waited ten minutes" },
+  needs_answer: { act: "`autopilot answer <id> --why \"<evidence>\" \"<label>\" ...`, one label per question; a label that is not an offered option is sent as the question's own \"Other\" text. The reason in --why is journaled. Escalate to the user what only they can decide: money, credentials, destructive actions.", kind: "decision", fields: ["id", "questions"], means: "The agent asked a multiple-choice question and waits" },
+  needs_answer_overdue: { act: "Escalate to the user. At 60 minutes the loop answers with the option marked Recommended, else the first, and logs answer_defaulted.", kind: "alert", wake: true, fields: ["id", "waitedMs"], means: "A question waited ten minutes" },
   answer_received: { kind: "telemetry", fields: ["id", "answer", "why"], means: "A question was answered" },
   answer_defaulted: { kind: "alert", wake: false, fields: ["id"], means: "A question was answered with its default after an hour" },
-  needs_reply: { kind: "decision", fields: ["id", "why", "lastMessage"], means: "The agent stopped in plan mode, or in bypass with no commit or a dirty tree" },
+  needs_reply: { act: "`autopilot reply <id> --why \"<reason>\" \"<text>\"`: tell the agent what to do next. At 10 minutes the loop sends a fixed nudge and logs reply_defaulted.", kind: "decision", fields: ["id", "why", "lastMessage"], means: "The agent stopped in plan mode, or in bypass with no commit or a dirty tree" },
   reply_received: { kind: "telemetry", fields: ["id", "answer", "why"], means: "A reply was given" },
   reply_defaulted: { kind: "alert", wake: false, fields: ["id", "why"], means: "A reply was sent as the fixed nudge after ten minutes" },
-  possibly_hung: { kind: "alert", wake: true, fields: ["silentMs", "running"], means: "No frame for 45 minutes, or a background command beyond its ceiling" },
-  hung_cancelled: { kind: "alert", wake: true, fields: ["silentMs"], means: "The turn was cancelled after three hours of silence" },
+  possibly_hung: { act: "Read the tail of the newest acp-*.jsonl in the run dir; run `autopilot stop` if the agent is stuck. The loop cancels the turn itself after three hours of silence.", kind: "alert", wake: true, fields: ["silentMs", "running"], means: "No frame for 45 minutes, or a background command beyond its ceiling" },
+  hung_cancelled: { act: "Read the tail of the newest acp-*.jsonl and tell the user what the agent was doing; the loop goes on by itself.", kind: "alert", wake: true, fields: ["silentMs"], means: "The turn was cancelled after three hours of silence" },
   permission_requested: { kind: "alert", wake: false, fields: ["tool", "chose"], means: "The permission mode still asked about a tool; the loop allowed it once" },
-  exit_plan_bypass_missing: { kind: "alert", wake: true, fields: ["offered"], means: "Leaving plan mode did not offer bypass" },
-  exit_plan_reject_missing: { kind: "alert", wake: true, fields: ["offered"], means: "Declining the plan exit was not offered" },
+  exit_plan_bypass_missing: { act: "Escalate to the user with the option ids in `offered`; the iteration halts.", kind: "alert", wake: true, fields: ["offered"], means: "Leaving plan mode did not offer bypass" },
+  exit_plan_reject_missing: { act: "Escalate to the user with the option ids in `offered`; the iteration halts.", kind: "alert", wake: true, fields: ["offered"], means: "Declining the plan exit was not offered" },
   background_started: { kind: "telemetry", fields: ["shellId", "command"], means: "The agent started a background command" },
   background_exited: { kind: "telemetry", fields: ["shellId", "exitCode", "via"], means: "A background command ended (a null code is a killed task; via liveness means the kernel proved the exit the agent never reported)" },
-  background_watch_error: { kind: "alert", wake: true, fields: ["shellId", "error"], means: "The loop could not read a background command's output file" },
+  background_watch_error: { act: "Look at the output file the error names; never edit it by hand, the loop trusts its last line.", kind: "alert", wake: true, fields: ["shellId", "error"], means: "The loop could not read a background command's output file" },
   rate_limit_rejected: { kind: "telemetry", fields: ["limitType", "resetsAt"], means: "The agent reported a rejected usage limit" },
   rate_limited: { kind: "alert", wake: false, fields: ["wakeAt"], means: "A usage limit hit and the loop waits" },
   limit_cleared: { kind: "progress", fields: ["early"], means: "The probe saw the account usable again" },
   preflight_wait: { kind: "telemetry", fields: ["reason"], means: "A new session is held back: a busy host or a leftover process" },
   agent_choice_changed: { kind: "telemetry", fields: ["from", "to"], means: "The next session uses a new agent, model or effort" },
-  agent_choice_invalid: { kind: "alert", wake: true, fields: ["error"], means: "choice.json could not be read; the current choice stays" },
+  agent_choice_invalid: { act: "Fix it with `autopilot use <harness> [--model <id>] [--effort <value>]` or `autopilot use --reset`.", kind: "alert", wake: true, fields: ["error"], means: "choice.json could not be read; the current choice stays" },
   agent_signal: { kind: "telemetry", fields: ["method", "params", "cause"], means: "A vendor notification nobody has read yet" },
   workflow_applied: { kind: "telemetry", fields: ["event", "handler", "actions"], means: "A workflow handler ran its actions for an event" },
-  workflow_error: { kind: "alert", wake: true, fields: ["event", "handler", "action", "error"], means: "A workflow action failed; the loop goes on" },
-  workflow_invalid: { kind: "alert", wake: true, fields: ["error"], means: "The workflow file could not be read at an iteration start; the previous one stays" },
+  workflow_error: { act: "Read `handler` and `action` in the event and fix the workflow file; the loop reads it again at the next iteration.", kind: "alert", wake: true, fields: ["event", "handler", "action", "error"], means: "A workflow action failed; the loop goes on" },
+  workflow_invalid: { act: "Fix the workflow file named in `error`.", kind: "alert", wake: true, fields: ["error"], means: "The workflow file could not be read at an iteration start; the previous one stays" },
 } as const satisfies Record<string, EventSpec>;
 
 export type EventName = keyof typeof EVENTS;
