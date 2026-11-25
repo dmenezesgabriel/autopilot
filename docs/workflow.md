@@ -194,6 +194,7 @@ An orchestrator session needs only the CLI:
 
 ```sh
 autopilot watch --repo <repo>        # one JSON line per event that needs you; use it as the Monitor command
+autopilot wait --repo <repo>         # the next such event, then return (exit 124 after --timeout s, default 270): one call per wake-up, for an agent with no Monitor
 autopilot pending --repo <repo>      # the same, as the questions still unanswered, with their full events
 autopilot answer <id> --why "..." "<label>"   # per question
 autopilot reply <id> --why "..." "<text>"

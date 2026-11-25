@@ -8,7 +8,8 @@ import { isIgnoredByGit } from "./git-probe.ts";
 import type { LoopEvent } from "./mailbox.ts";
 import { formatSimulation, simulate } from "./simulate.ts";
 import { STARTER_WORKFLOW } from "./starter-workflow.ts";
-import { followLines, shouldWake } from "./watch.ts";
+import { readWaitCursor, nextWantedLine, writeWaitCursor } from "./wait.ts";
+import { followLines, shouldWake, sizeOf } from "./watch.ts";
 import { DEFAULT_WORKFLOW_FILE, loadWorkflow, type Workflow } from "./workflow.ts";
 import { summarizeJournal } from "./journal-summary.ts";
 
@@ -104,6 +105,41 @@ export async function watch(args: string[], out: (line: string) => void, signal:
     const event = parseLine(line);
     if (event !== null && shouldWake(event, wake)) out(line);
   }, { fromStart: rest.includes("--from-start"), pollMs: 1000, signal });
+}
+
+/** `--timeout` in seconds, 270 by default: the longest single wait a Devin orchestrator has been seen to block on. */
+const DEFAULT_WAIT_SECONDS = 270;
+
+/**
+ * `autopilot wait`: prints the next event the orchestrator must act on and returns, so one model
+ * request is spent per wake-up instead of one per look at the journal. Exit 0 with the event line,
+ * or 124 (GNU `timeout`'s code) and no stdout when `--timeout` seconds pass without one. The cursor
+ * in the run directory makes consecutive calls lossless: an event written between two calls is
+ * delivered by the next one. `watch` stays for a Monitor that can hold a stream open.
+ */
+export async function waitCommand(args: string[], out: (line: string) => void, say: (text: string) => void, signal: AbortSignal): Promise<number> {
+  const { repoRoot, workflowPath, workflowFlag, rest } = locate(args);
+  const runDir = await runDirFor(repoRoot, workflowFlag);
+  const workflow = await loadWorkflow(workflowPath, false);
+  const seconds = parseSeconds(requiredValue(rest, "--timeout", "a number of seconds"));
+  const journal = `${runDir.path}/events.jsonl`;
+  const cursorPath = `${runDir.path}/wait.cursor`;
+  const start = (await readWaitCursor(cursorPath)) ?? (await sizeOf(journal));
+  const wanted = (line: string): boolean => {
+    const event = parseLine(line);
+    return event !== null && shouldWake(event, workflow.wake);
+  };
+  const found = await nextWantedLine(journal, start, wanted, { timeoutMs: seconds * 1000, pollMs: 1000, signal });
+  await writeWaitCursor(cursorPath, found.offset);
+  if (found.line === null) return (say(`no event that needs you in ${seconds} s; run \`autopilot wait\` again`), 124);
+  return (out(found.line), 0);
+}
+
+function parseSeconds(value: string | null): number {
+  if (value === null) return DEFAULT_WAIT_SECONDS;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) throw new Error(`--timeout needs a number of seconds, got ${JSON.stringify(value)}`);
+  return seconds;
 }
 
 function parseLine(line: string): LoopEvent | null {

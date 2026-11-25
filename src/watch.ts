@@ -36,11 +36,11 @@ export async function followLines(path: string, onLine: (line: string) => void, 
   }
 }
 
-async function sizeOf(path: string): Promise<number> {
+export async function sizeOf(path: string): Promise<number> {
   return stat(path).then((info) => info.size, () => 0);
 }
 
-async function readRange(path: string, from: number, to: number): Promise<string> {
+export async function readRange(path: string, from: number, to: number): Promise<string> {
   const handle = await open(path, "r");
   try {
     const buffer = Buffer.alloc(to - from);

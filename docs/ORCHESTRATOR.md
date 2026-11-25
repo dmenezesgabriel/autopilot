@@ -23,6 +23,8 @@ Start it from a shell whose PATH has `claude-agent-acp` (or add `--agent-command
 
 `autopilot watch` prints one JSON line per event the orchestrator must act on: the events in the workflow's `wake` list that no handler has already answered. By default that is the decisions and the escalations, not `iteration_done` or `permission_requested` (69 of the 160 wake-ups the old `tail | grep` Monitor sent). A repository that wants a report of each commit puts it in its workflow as a command, `on: iteration_done: - do: { run: [...] }`, which costs no orchestrator turn. `autopilot pending` lists what is still unanswered, with each full event, when a session starts or resumes.
 
+An orchestrator whose agent has no Monitor tool (a Devin session, for one) waits with `autopilot wait --repo <repo>` instead: it prints the next such event and returns at once, or exits 124 with no output after `--timeout` seconds (default 270, the longest single wait a Devin orchestrator has been seen to block on). One call is one model request, whatever the wait. A cursor in the run directory (`wait.cursor`) makes consecutive calls lossless: an event written between two calls is delivered by the next, in order, and the first call starts at the end of the journal, like `watch`. Do not build this from `autopilot watch | head -n 1`: measured, the pipeline returns only when `watch` exits, so every answer waits out the whole timeout, and an event written between two such calls is lost.
+
 ## Choosing the agent
 
 The workflow's `harness` and `harnesses` say it ([workflow.md](workflow.md#harness-model-effort-and-command)); `--harness claude|devin`, `--model <id>`, `--effort <value>` override it at start, one field at a time: a flag changes only the field it names and keeps the rest of the override `autopilot use` set, except that naming another harness drops the old model and effort. A restart needs no flag when `autopilot.yaml` already names the harness. To switch while the loop runs, change the choice between iterations, never inside one:
@@ -46,7 +48,7 @@ A model or effort the harness does not offer halts the iteration with the offere
 
 Measured on three loops (see [rationale.md](rationale.md)), the orchestrator sessions cost a large share of the total, because each ran thousands of messages. So:
 
-- Never poll. The Monitor (`autopilot watch`) is the only wake-up.
+- Never poll. The Monitor (`autopilot watch`), or one `autopilot wait` call per wake-up where there is no Monitor, is the only wake-up. A model that re-reads the journal every second spends a request each time: one Devin orchestrator sent 610 requests in 9 minutes that way and tripped the account's free-model limit for the worker too (that limit is shared across the free SWE models; the highest rolling hour without a hit was 494 requests across all repos, the hits came at 651 to 929).
 - One short action per event: grep the one PRD or ADR row a question names, run one `autopilot` command, say nothing else.
 - Start a fresh orchestrator session every few iterations, and use a small model for it. The journal and `autopilot status` carry all state.
 - A question whose Recommended option follows the repository's policy needs no long reasoning; measured, an orchestrator chose that option for 10 of the 18 questions that had one.

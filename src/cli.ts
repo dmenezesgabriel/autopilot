@@ -1,7 +1,7 @@
 import { runCtl } from "./ctl.ts";
 import { isEntryPoint } from "./entry-point.ts";
 import { main as runLoop } from "./run.ts";
-import { events, init, pending, readVersion, simulateCommand, validate, watch } from "./workflow-commands.ts";
+import { events, init, pending, readVersion, simulateCommand, validate, waitCommand, watch } from "./workflow-commands.ts";
 
 const USAGE = `autopilot: drives an ACP coding agent through a repository's backlog, one session per commit.
 
@@ -16,6 +16,7 @@ usage: autopilot <command> [--repo <dir>] ...
   status             what runs, what waits, what finished
   pending            the questions and replies still waiting, as JSON
   watch              print, as JSON lines, the events an orchestrator must act on
+  wait [--timeout s] print the next such event and return (exit 124 after --timeout s, default 270)
   answer <id> [--why <reason>] <label>...
   reply <id> [--why <reason>] <text>
   use <harness> [--model <id>] [--effort <value>] | use --reset
@@ -33,6 +34,7 @@ export async function cli(argv: string[]): Promise<number> {
   const [command = "", ...rest] = argv;
   if (command === "run") return runLoop(rest);
   if (command === "watch") return watchUntilInterrupted(rest);
+  if (command === "wait") return waitUntilInterrupted(rest);
   const print = (text: string): number => (console.log(text), 0);
   if (CTL_COMMANDS.has(command)) return print(await runCtl(argv));
   if (command === "validate") return print(await validate(rest));
@@ -50,6 +52,12 @@ async function watchUntilInterrupted(args: string[]): Promise<number> {
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => controller.abort());
   await watch(args, (line) => console.log(line), controller.signal);
   return 0;
+}
+
+async function waitUntilInterrupted(args: string[]): Promise<number> {
+  const controller = new AbortController();
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => controller.abort());
+  return waitCommand(args, (line) => console.log(line), (text) => console.error(text), controller.signal);
 }
 
 export function main(argv: string[]): void {
